@@ -24,6 +24,7 @@
   button:hover { border-color:#3d4557; }
   button.on { background:#24405a; border-color:var(--accent); color:#fff; }
   .seg button { flex:1 1 auto; }
+  #dims button { font-weight:600; padding:6px 8px; }
   .chk { display:flex; align-items:center; gap:6px; margin:4px 0; }
   .help { color:var(--dim); font-size:11.5px; margin-top:8px; }
   kbd { background:#1c212d; border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:11px; }
@@ -31,7 +32,6 @@
     background:rgba(11,13,18,.6); padding:5px 9px; border-radius:6px; pointer-events:none; }
   #toggle { position:fixed; top:12px; right:12px; display:none; }
   #panel.hidden ~ #toggle { display:block; }
-  .legend span { display:inline-block; width:10px; height:3px; margin:0 4px 2px 8px; vertical-align:middle; }
 </style>
 </head>
 <body>
@@ -39,6 +39,8 @@
 <aside id="panel">
   <h1>Boids</h1>
   <div class="sub">Craig Reynolds’ flocking model (1987): each boid steers by three local rules — separation, alignment, cohesion.</div>
+
+  <div class="seg" id="dims"><button data-dim="2d">2D</button><button data-dim="3d">3D</button></div>
 
   <h2>Presets</h2>
   <div class="seg" id="presets"></div>
@@ -58,14 +60,15 @@
 
   <h2>World</h2>
   <div class="row"><label>Edges</label>
-    <select id="edges" style="grid-column:span 2"><option value="wrap">Wrap (torus)</option><option value="avoid">Steer away from walls</option></select></div>
+    <select id="edges" style="grid-column:span 2"><option value="wrap">Wrap around</option><option value="avoid">Steer away from walls</option></select></div>
   <div class="row"><label>Colour</label>
     <select id="color" style="grid-column:span 2"><option value="heading">By heading</option><option value="density">By neighbour count</option><option value="mono">Plain</option></select></div>
   <label class="chk"><input type="checkbox" id="trails"> Trails</label>
+  <label class="chk" id="autoRow"><input type="checkbox" id="autorot" checked> Slowly rotate view</label>
   <div class="seg" style="margin-top:6px">
     <button id="pause">Pause</button><button id="stepbtn">Step</button><button id="reset">Scatter</button><button id="clearObs">Clear obstacles</button>
   </div>
-  <div class="help"><kbd>Space</kbd> pause · <kbd>S</kbd> step · <kbd>R</kbd> scatter · <kbd>H</kbd> hide panel</div>
+  <div class="help"><kbd>Space</kbd> pause · <kbd>S</kbd> step · <kbd>R</kbd> scatter · <kbd>D</kbd> 2D/3D · <kbd>H</kbd> hide panel</div>
 </aside>
 <button id="toggle">☰ Controls</button>
 <div id="hud"></div>
@@ -74,6 +77,7 @@
 "use strict";
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
+const panel = document.getElementById('panel');
 
 // ---------- parameters ----------
 const DEFAULTS = {
@@ -110,27 +114,69 @@ const SLIDERS = {
   ],
 };
 
-// ---------- boid state (structure of arrays) ----------
-const MAX = 6000;
-const px = new Float32Array(MAX), py = new Float32Array(MAX);
-const vx = new Float32Array(MAX), vy = new Float32Array(MAX);
-const ax = new Float32Array(MAX), ay = new Float32Array(MAX);
-const nbr = new Uint16Array(MAX);
-let N = 0;
-
+// ---------- world ----------
+// 2D: the world is the window (z unused, always 0).  3D: a fixed box viewed by an orbiting camera.
+// The box volume is chosen so a boid has about as many neighbours as in a 2D window.
+const BOX = [600, 440, 440];
+let is3D = false;
 let W = 0, H = 0, dpr = 1;
+let WX = 0, WY = 0, WZ = 0;
+const cam = { yaw: 0.55, pitch: 0.38, dist: 1150, auto: true };
+let focal = 800, scx = 0, scy = 0, cY = 1, sY = 0, cP = 1, sP = 0;
+
+function setDims() {
+  if (is3D) { WX = BOX[0]; WY = BOX[1]; WZ = BOX[2]; }
+  else { WX = W; WY = H; WZ = 0; }
+}
 function resize() {
   dpr = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, H);
+  focal = Math.min(W, H) * 0.95;
+  setDims();
 }
 
+// ---------- camera (3D only) ----------
+function updateCamera() {
+  cY = Math.cos(cam.yaw); sY = Math.sin(cam.yaw); cP = Math.cos(cam.pitch); sP = Math.sin(cam.pitch);
+  scx = (!panel.classList.contains('hidden') && W > 760) ? (W - 296) / 2 : W / 2;
+  scy = H / 2;
+}
+let PX = 0, PY = 0, PZ = 0, PS = 1;   // last projection: screen x, y, depth, pixels per world unit
+function project(x, y, z) {
+  if (!is3D) { PX = x; PY = y; PZ = 0; PS = 1; return; }
+  const X = x - WX / 2, Y = y - WY / 2, Z = z - WZ / 2;
+  const x1 = cY * X + sY * Z, z1 = -sY * X + cY * Z;
+  const y2 = cP * Y - sP * z1, z2 = sP * Y + cP * z1;
+  const d = Math.max(z2 + cam.dist, 1), k = focal / d;
+  PX = scx + x1 * k; PY = scy + y2 * k; PZ = d; PS = k;
+}
+// screen point -> world point on the plane through the box centre facing the camera
+function unproject(sx, sy) {
+  if (!is3D) return [sx, sy, 0];
+  const x1 = (sx - scx) * cam.dist / focal, y2 = (sy - scy) * cam.dist / focal;
+  const Y = cP * y2, z1 = -sP * y2;
+  const X = cY * x1 - sY * z1, Z = sY * x1 + cY * z1;
+  return [X + WX / 2, Y + WY / 2, Z + WZ / 2];
+}
+
+// ---------- boid state (structure of arrays) ----------
+const MAX = 6000;
+const px = new Float32Array(MAX), py = new Float32Array(MAX), pz = new Float32Array(MAX);
+const vx = new Float32Array(MAX), vy = new Float32Array(MAX), vz = new Float32Array(MAX);
+const ax = new Float32Array(MAX), ay = new Float32Array(MAX), az = new Float32Array(MAX);
+const nbr = new Uint16Array(MAX);
+let N = 0;
+
 function spawn(i) {
-  px[i] = Math.random() * W; py[i] = Math.random() * H;
-  const a = Math.random() * Math.PI * 2, s = P.speed * (0.5 + 0.5 * Math.random());
-  vx[i] = Math.cos(a) * s; vy[i] = Math.sin(a) * s;
+  px[i] = Math.random() * WX; py[i] = Math.random() * WY; pz[i] = is3D ? Math.random() * WZ : 0;
+  const s = P.speed * (0.5 + 0.5 * Math.random()), a = Math.random() * Math.PI * 2;
+  if (is3D) {
+    const u = Math.random() * 2 - 1, r = Math.sqrt(1 - u * u);
+    vx[i] = r * Math.cos(a) * s; vy[i] = u * s; vz[i] = r * Math.sin(a) * s;
+  } else { vx[i] = Math.cos(a) * s; vy[i] = Math.sin(a) * s; vz[i] = 0; }
 }
 function setCount(n) {
   n = Math.max(0, Math.min(MAX, n | 0));
@@ -141,30 +187,33 @@ function setCount(n) {
 function scatter() { for (let i = 0; i < N; i++) spawn(i); }
 
 // ---------- obstacles & pointer ----------
-const obstacles = [];
-const pointer = { x: 0, y: 0, inside: false, down: false };
+const obstacles = [];   // {x, y, z, r}: circles in 2D, spheres in 3D
+const pointer = { x: 0, y: 0, inside: false, down: false, wx: 0, wy: 0, wz: 0 };
 let mode = 'predator';
 let focus = -1;
 let focusDebug = null;
+const PRED_R = 130;
 
 // ---------- uniform grid for neighbour lookup ----------
-let gcols = 1, grows = 1, cw = 1, ch = 1;
+let gcols = 1, grows = 1, glays = 1, cw = 1, ch = 1, cd = 1;
 let cellStart = new Int32Array(2), cellFill = new Int32Array(2);
 const cellIdx = new Int32Array(MAX), boidCell = new Int32Array(MAX);
-const colList = [0, 0, 0], rowList = [0, 0, 0];
+const colList = [0, 0, 0], rowList = [0, 0, 0], layList = [0, 0, 0];
 
 function buildGrid() {
   const size = Math.max(P.radius, P.sepRadius, 8);
-  gcols = Math.max(1, Math.floor(W / size)); grows = Math.max(1, Math.floor(H / size));
-  cw = W / gcols; ch = H / grows;            // cells are at least `size` wide, so 3x3 covers the radius
-  const nc = gcols * grows;
+  gcols = Math.max(1, Math.floor(WX / size)); grows = Math.max(1, Math.floor(WY / size));
+  glays = is3D ? Math.max(1, Math.floor(WZ / size)) : 1;
+  cw = WX / gcols; ch = WY / grows; cd = is3D ? WZ / glays : 1;   // cells ≥ radius, so 3x3(x3) covers it
+  const nc = gcols * grows * glays;
   if (cellStart.length < nc + 1) { cellStart = new Int32Array(nc + 1); cellFill = new Int32Array(nc + 1); }
   else cellStart.fill(0, 0, nc + 1);
   for (let i = 0; i < N; i++) {
-    let cx = Math.floor(px[i] / cw), cy = Math.floor(py[i] / ch);
+    let cx = Math.floor(px[i] / cw), cy = Math.floor(py[i] / ch), cz = is3D ? Math.floor(pz[i] / cd) : 0;
     cx = cx < 0 ? 0 : cx >= gcols ? gcols - 1 : cx;
     cy = cy < 0 ? 0 : cy >= grows ? grows - 1 : cy;
-    const c = cy * gcols + cx;
+    cz = cz < 0 ? 0 : cz >= glays ? glays - 1 : cz;
+    const c = (cz * grows + cy) * gcols + cx;
     boidCell[i] = c; cellStart[c + 1]++;
   }
   for (let c = 0; c < nc; c++) cellStart[c + 1] += cellStart[c];
@@ -172,7 +221,7 @@ function buildGrid() {
   for (let i = 0; i < N; i++) cellIdx[cellFill[boidCell[i]]++] = i;
 }
 
-// unique neighbouring column/row indices (handles grids narrower than 3 cells)
+// unique neighbouring cell indices along one axis (handles axes narrower than 3 cells)
 function neighbours(list, c, n, wrap) {
   let k = 0;
   for (let d = -1; d <= 1; d++) {
@@ -186,14 +235,14 @@ function neighbours(list, c, n, wrap) {
 }
 
 // ---------- Reynolds steering:  steer = desired_velocity - velocity, truncated to max force ----------
-let sx_ = 0, sy_ = 0;
-function steer(dx, dy, ux, uy, maxS, maxF) {
-  const l = Math.hypot(dx, dy);
-  if (l < 1e-9) { sx_ = 0; sy_ = 0; return; }
-  let fx = dx / l * maxS - ux, fy = dy / l * maxS - uy;
-  const f = Math.hypot(fx, fy);
-  if (f > maxF) { fx *= maxF / f; fy *= maxF / f; }
-  sx_ = fx; sy_ = fy;
+let sx_ = 0, sy_ = 0, sz_ = 0;
+function steer(dx, dy, dz, ux, uy, uz, maxS, maxF) {
+  const l = Math.hypot(dx, dy, dz);
+  if (l < 1e-9) { sx_ = 0; sy_ = 0; sz_ = 0; return; }
+  let fx = dx / l * maxS - ux, fy = dy / l * maxS - uy, fz = dz / l * maxS - uz;
+  const f = Math.hypot(fx, fy, fz);
+  if (f > maxF) { const k = maxF / f; fx *= k; fy *= k; fz *= k; }
+  sx_ = fx; sy_ = fy; sz_ = fz;
 }
 
 function step() {
@@ -202,238 +251,334 @@ function step() {
   const r2 = P.radius * P.radius, s2 = P.sepRadius * P.sepRadius;
   const cosHalf = P.fov >= 360 ? -2 : Math.cos(P.fov / 2 * Math.PI / 180);
   const maxS = P.speed, maxF = P.force;
-  const hw = W / 2, hh = H / 2;
+  const hw = WX / 2, hh = WY / 2, hd = WZ / 2;
   const debug = focus >= 0 && focus < N;
   focusDebug = null;
+  const usePointer = pointer.inside && (mode === 'predator' || mode === 'attract');
 
   for (let i = 0; i < N; i++) {
-    const x = px[i], y = py[i], ux = vx[i], uy = vy[i];
-    const sp = Math.hypot(ux, uy) || 1, hx = ux / sp, hy = uy / sp;
-    let n = 0, avx = 0, avy = 0, cx = 0, cy = 0, sx = 0, sy = 0, ns = 0;
+    const x = px[i], y = py[i], z = pz[i], ux = vx[i], uy = vy[i], uz = vz[i];
+    const sp = Math.hypot(ux, uy, uz) || 1, hx = ux / sp, hy = uy / sp, hz = uz / sp;
+    let n = 0, avx = 0, avy = 0, avz = 0, cx = 0, cy = 0, cz = 0, sx = 0, sy = 0, sz = 0, ns = 0;
     const isFocus = debug && i === focus;
     const seen = isFocus ? [] : null;
 
-    const c = boidCell[i], gx = c % gcols, gy = (c / gcols) | 0;
+    const c = boidCell[i], gx = c % gcols, gy = ((c / gcols) | 0) % grows, gz = (c / (gcols * grows)) | 0;
     const nCols = neighbours(colList, gx, gcols, wrap), nRows = neighbours(rowList, gy, grows, wrap);
-    for (let a = 0; a < nRows; a++) {
-      const rowBase = rowList[a] * gcols;
-      for (let b = 0; b < nCols; b++) {
-        const cell = rowBase + colList[b];
-        for (let k = cellStart[cell], e = cellStart[cell + 1]; k < e; k++) {
-          const j = cellIdx[k];
-          if (j === i) continue;
-          let dx = px[j] - x, dy = py[j] - y;
-          if (wrap) {
-            if (dx > hw) dx -= W; else if (dx < -hw) dx += W;
-            if (dy > hh) dy -= H; else if (dy < -hh) dy += H;
+    const nLays = is3D ? neighbours(layList, gz, glays, wrap) : (layList[0] = 0, 1);
+    for (let l = 0; l < nLays; l++) {
+      const layBase = layList[l] * grows;
+      for (let a = 0; a < nRows; a++) {
+        const rowBase = (layBase + rowList[a]) * gcols;
+        for (let b = 0; b < nCols; b++) {
+          const cell = rowBase + colList[b];
+          for (let k = cellStart[cell], e = cellStart[cell + 1]; k < e; k++) {
+            const j = cellIdx[k];
+            if (j === i) continue;
+            let dx = px[j] - x, dy = py[j] - y, dz = pz[j] - z;
+            if (wrap) {
+              if (dx > hw) dx -= WX; else if (dx < -hw) dx += WX;
+              if (dy > hh) dy -= WY; else if (dy < -hh) dy += WY;
+              if (is3D) { if (dz > hd) dz -= WZ; else if (dz < -hd) dz += WZ; }
+            }
+            const d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 > r2 || d2 < 1e-6) continue;
+            const d = Math.sqrt(d2);
+            if ((dx * hx + dy * hy + dz * hz) / d < cosHalf) continue;   // behind the boid: outside its field of view
+            n++; avx += vx[j]; avy += vy[j]; avz += vz[j]; cx += dx; cy += dy; cz += dz;
+            if (d2 < s2) { sx -= dx / d2; sy -= dy / d2; sz -= dz / d2; ns++; } // repulsion weighted by 1/distance
+            if (seen) seen.push(j);
           }
-          const d2 = dx * dx + dy * dy;
-          if (d2 > r2 || d2 < 1e-6) continue;
-          const d = Math.sqrt(d2);
-          if ((dx * hx + dy * hy) / d < cosHalf) continue;   // behind the boid: outside its field of view
-          n++; avx += vx[j]; avy += vy[j]; cx += dx; cy += dy;
-          if (d2 < s2) { sx -= dx / d2; sy -= dy / d2; ns++; } // repulsion weighted by 1/distance
-          if (seen) seen.push(j);
         }
       }
     }
     nbr[i] = n;
 
-    let fx = 0, fy = 0;
-    let fSep = [0, 0], fAli = [0, 0], fCoh = [0, 0];
-    if (ns) { steer(sx, sy, ux, uy, maxS, maxF); fx += P.sep * sx_; fy += P.sep * sy_; if (isFocus) fSep = [P.sep * sx_, P.sep * sy_]; }
+    let fx = 0, fy = 0, fz = 0;
+    let fSep = [0, 0, 0], fAli = [0, 0, 0], fCoh = [0, 0, 0];
+    if (ns) {
+      steer(sx, sy, sz, ux, uy, uz, maxS, maxF); fx += P.sep * sx_; fy += P.sep * sy_; fz += P.sep * sz_;
+      if (isFocus) fSep = [P.sep * sx_, P.sep * sy_, P.sep * sz_];
+    }
     if (n) {
-      steer(avx, avy, ux, uy, maxS, maxF); fx += P.ali * sx_; fy += P.ali * sy_; if (isFocus) fAli = [P.ali * sx_, P.ali * sy_];
-      steer(cx, cy, ux, uy, maxS, maxF);   fx += P.coh * sx_; fy += P.coh * sy_; if (isFocus) fCoh = [P.coh * sx_, P.coh * sy_];
+      steer(avx, avy, avz, ux, uy, uz, maxS, maxF); fx += P.ali * sx_; fy += P.ali * sy_; fz += P.ali * sz_;
+      if (isFocus) fAli = [P.ali * sx_, P.ali * sy_, P.ali * sz_];
+      steer(cx, cy, cz, ux, uy, uz, maxS, maxF); fx += P.coh * sx_; fy += P.coh * sy_; fz += P.coh * sz_;
+      if (isFocus) fCoh = [P.coh * sx_, P.coh * sy_, P.coh * sz_];
     }
 
-    // obstacles: steer away, stronger the closer we get
+    // obstacles: steer away, stronger the closer we get, with a sidestep so boids slide round them
     for (let o = 0; o < obstacles.length; o++) {
       const ob = obstacles[o];
-      const dx = x - ob.x, dy = y - ob.y, d = Math.hypot(dx, dy);
+      const dx = x - ob.x, dy = y - ob.y, dz = z - ob.z, d = Math.hypot(dx, dy, dz);
       const reach = ob.r + Math.max(30, P.radius);
       if (d < reach && d > 1e-6) {
         const t = 1 - Math.max(0, d - ob.r) / (reach - ob.r);
-        // blend radial push with a sidestep along the tangent the boid is already turning toward
-        const side = (dx * hy - dy * hx) > 0 ? 1 : -1;
-        const tx = -dy / d * side, ty = dx / d * side;
-        steer(dx / d + tx * 0.7, dy / d + ty * 0.7, ux, uy, maxS, maxF);
-        fx += 4 * t * t * sx_ * (1 + t); fy += 4 * t * t * sy_ * (1 + t);
+        const rx = dx / d, ry = dy / d, rz = dz / d;
+        // tangent: the component of the heading perpendicular to the radial direction
+        const dot = hx * rx + hy * ry + hz * rz;
+        let tx = hx - dot * rx, ty = hy - dot * ry, tz = hz - dot * rz;
+        const tl = Math.hypot(tx, ty, tz);
+        if (tl > 1e-6) { tx /= tl; ty /= tl; tz /= tl; } else if (is3D) { tx = -ry; ty = rx; tz = 0; } else { tx = -ry; ty = rx; tz = 0; }
+        steer(rx + tx * 0.7, ry + ty * 0.7, rz + tz * 0.7, ux, uy, uz, maxS, maxF);
+        const w = 4 * t * t * (1 + t);
+        fx += w * sx_; fy += w * sy_; fz += w * sz_;
       }
     }
 
     // walls (when not wrapping): Reynolds' containment
     if (!wrap) {
-      const m = Math.min(80, Math.min(W, H) * 0.15);
-      let ex = 0, ey = 0, t = 0;
-      if (x < m) { ex = 1; t = Math.max(t, 1 - x / m); } else if (x > W - m) { ex = -1; t = Math.max(t, 1 - (W - x) / m); }
-      if (y < m) { ey = 1; t = Math.max(t, 1 - y / m); } else if (y > H - m) { ey = -1; t = Math.max(t, 1 - (H - y) / m); }
-      if (ex || ey) { steer(ex, ey, ux, uy, maxS, maxF); fx += 3 * t * sx_; fy += 3 * t * sy_; }
+      const m = Math.min(80, Math.min(WX, WY, is3D ? WZ : Infinity) * 0.15);
+      let ex = 0, ey = 0, ez = 0, t = 0;
+      if (x < m) { ex = 1; t = Math.max(t, 1 - x / m); } else if (x > WX - m) { ex = -1; t = Math.max(t, 1 - (WX - x) / m); }
+      if (y < m) { ey = 1; t = Math.max(t, 1 - y / m); } else if (y > WY - m) { ey = -1; t = Math.max(t, 1 - (WY - y) / m); }
+      if (is3D) { if (z < m) { ez = 1; t = Math.max(t, 1 - z / m); } else if (z > WZ - m) { ez = -1; t = Math.max(t, 1 - (WZ - z) / m); } }
+      if (ex || ey || ez) { steer(ex, ey, ez, ux, uy, uz, maxS, maxF); fx += 3 * t * sx_; fy += 3 * t * sy_; fz += 3 * t * sz_; }
     }
 
     // pointer: predator to flee from, or a target to seek
-    if (pointer.inside && (mode === 'predator' || mode === 'attract')) {
-      let dx = pointer.x - x, dy = pointer.y - y;
+    if (usePointer) {
+      let dx = pointer.wx - x, dy = pointer.wy - y, dz = pointer.wz - z;
       if (wrap) {
-        if (dx > hw) dx -= W; else if (dx < -hw) dx += W;
-        if (dy > hh) dy -= H; else if (dy < -hh) dy += H;
+        if (dx > hw) dx -= WX; else if (dx < -hw) dx += WX;
+        if (dy > hh) dy -= WY; else if (dy < -hh) dy += WY;
+        if (is3D) { if (dz > hd) dz -= WZ; else if (dz < -hd) dz += WZ; }
       }
-      const d = Math.hypot(dx, dy);
+      const d = Math.hypot(dx, dy, dz);
       if (mode === 'predator') {
-        const R = 130;
-        if (d < R) { const t = 1 - d / R; steer(-dx, -dy, ux, uy, maxS * 1.6, maxF * 3); fx += 3 * t * sx_; fy += 3 * t * sy_; }
+        if (d < PRED_R) { const t = 1 - d / PRED_R; steer(-dx, -dy, -dz, ux, uy, uz, maxS * 1.6, maxF * 3); fx += 3 * t * sx_; fy += 3 * t * sy_; fz += 3 * t * sz_; }
       } else {
-        steer(dx, dy, ux, uy, maxS, maxF); const w = pointer.down ? 3 : 1.5; fx += w * sx_; fy += w * sy_;
+        steer(dx, dy, dz, ux, uy, uz, maxS, maxF); const w = pointer.down ? 3 : 1.5; fx += w * sx_; fy += w * sy_; fz += w * sz_;
       }
     }
 
-    if (P.noise > 0) { const a = Math.random() * Math.PI * 2, m = P.noise * maxF * 2; fx += Math.cos(a) * m; fy += Math.sin(a) * m; }
+    if (P.noise > 0) {
+      const m = P.noise * maxF * 2, a = Math.random() * Math.PI * 2;
+      if (is3D) { const u = Math.random() * 2 - 1, r = Math.sqrt(1 - u * u); fx += r * Math.cos(a) * m; fy += u * m; fz += r * Math.sin(a) * m; }
+      else { fx += Math.cos(a) * m; fy += Math.sin(a) * m; }
+    }
 
-    ax[i] = fx; ay[i] = fy;
+    ax[i] = fx; ay[i] = fy; az[i] = fz;
     if (isFocus) focusDebug = { seen, fSep, fAli, fCoh };
   }
 
   // integrate all boids after every force is computed, so update order doesn't matter
   const minS = maxS * 0.35;
   for (let i = 0; i < N; i++) {
-    let ux = vx[i] + ax[i], uy = vy[i] + ay[i];
-    const s = Math.hypot(ux, uy);
-    if (s > maxS) { ux *= maxS / s; uy *= maxS / s; }
-    else if (s < minS) { if (s < 1e-6) { ux = minS; uy = 0; } else { ux *= minS / s; uy *= minS / s; } }
-    vx[i] = ux; vy[i] = uy;
-    let x = px[i] + ux, y = py[i] + uy;
+    let ux = vx[i] + ax[i], uy = vy[i] + ay[i], uz = vz[i] + az[i];
+    const s = Math.hypot(ux, uy, uz);
+    if (s > maxS) { const k = maxS / s; ux *= k; uy *= k; uz *= k; }
+    else if (s < minS) { if (s < 1e-6) { ux = minS; uy = 0; uz = 0; } else { const k = minS / s; ux *= k; uy *= k; uz *= k; } }
+    vx[i] = ux; vy[i] = uy; vz[i] = uz;
+    let x = px[i] + ux, y = py[i] + uy, z = pz[i] + uz;
     if (wrap) {
-      if (x < 0) x += W; else if (x >= W) x -= W;
-      if (y < 0) y += H; else if (y >= H) y -= H;
-      if (x < 0 || x >= W) x = ((x % W) + W) % W;
-      if (y < 0 || y >= H) y = ((y % H) + H) % H;
+      x = x < 0 || x >= WX ? ((x % WX) + WX) % WX : x;
+      y = y < 0 || y >= WY ? ((y % WY) + WY) % WY : y;
+      if (is3D) z = z < 0 || z >= WZ ? ((z % WZ) + WZ) % WZ : z;
     } else {
-      if (x < 0) { x = 0; vx[i] = Math.abs(ux); } else if (x > W) { x = W; vx[i] = -Math.abs(ux); }
-      if (y < 0) { y = 0; vy[i] = Math.abs(uy); } else if (y > H) { y = H; vy[i] = -Math.abs(uy); }
+      if (x < 0) { x = 0; vx[i] = Math.abs(ux); } else if (x > WX) { x = WX; vx[i] = -Math.abs(ux); }
+      if (y < 0) { y = 0; vy[i] = Math.abs(uy); } else if (y > WY) { y = WY; vy[i] = -Math.abs(uy); }
+      if (is3D) { if (z < 0) { z = 0; vz[i] = Math.abs(uz); } else if (z > WZ) { z = WZ; vz[i] = -Math.abs(uz); } }
     }
+    if (!is3D) z = 0;
     // never end a step inside an obstacle
     for (let o = 0; o < obstacles.length; o++) {
-      const ob = obstacles[o], dx = x - ob.x, dy = y - ob.y, d = Math.hypot(dx, dy);
-      if (d < ob.r + 1) { const k = (ob.r + 1) / (d || 1); x = ob.x + (d ? dx : 1) * k; y = ob.y + (d ? dy : 0) * k; }
+      const ob = obstacles[o], dx = x - ob.x, dy = y - ob.y, dz = z - ob.z, d = Math.hypot(dx, dy, dz);
+      if (d < ob.r + 1) {
+        if (d < 1e-6) { x = ob.x + ob.r + 1; }
+        else { const k = (ob.r + 1) / d; x = ob.x + dx * k; y = ob.y + dy * k; z = ob.z + dz * k; }
+      }
     }
-    px[i] = x; py[i] = y;
+    px[i] = x; py[i] = y; pz[i] = z;
   }
 }
 
 // ---------- rendering ----------
-const BUCKETS = 48;
-const bucketOf = new Uint8Array(MAX), bucketCount = new Int32Array(BUCKETS + 1), order = new Int32Array(MAX);
+// Boids are bucketed by (depth band, colour) so each bucket is one path and one fill;
+// bands are drawn far to near, which gives a painter's-order depth sort in 3D.
+const BUCKETS = 48, BANDS = 6, NBK = BUCKETS * BANDS;
+const bucketOf = new Uint16Array(MAX), bucketCount = new Int32Array(NBK + 1), order = new Int32Array(MAX);
 const bucketColor = [];
 function bucketColors() {
   bucketColor.length = 0;
-  for (let b = 0; b < BUCKETS; b++) {
-    if (P.color === 'heading') bucketColor.push(`hsl(${(b / BUCKETS * 360) | 0},72%,64%)`);
-    else if (P.color === 'density') { const t = b / (BUCKETS - 1); bucketColor.push(`hsl(${(220 - 200 * t) | 0},${60 + 25 * t | 0}%,${45 + 25 * t | 0}%)`); }
-    else bucketColor.push('#cfd6e4');
+  for (let band = 0; band < BANDS; band++) {
+    const near = band / (BANDS - 1);          // 1 = nearest; 2D uses the nearest band only
+    for (let b = 0; b < BUCKETS; b++) {
+      if (P.color === 'heading') bucketColor.push(`hsl(${(b / BUCKETS * 360) | 0},${50 + 22 * near | 0}%,${26 + 38 * near | 0}%)`);
+      else if (P.color === 'density') { const t = b / (BUCKETS - 1); bucketColor.push(`hsl(${(220 - 200 * t) | 0},${60 + 25 * t | 0}%,${(45 + 25 * t) * (0.45 + 0.55 * near) | 0}%)`); }
+      else bucketColor.push(`hsl(220,18%,${30 + 54 * near | 0}%)`);
+    }
+  }
+}
+function bandOf(depth, zNear, zFar) {
+  if (!is3D) return BANDS - 1;
+  const t = (zFar - depth) / (zFar - zNear);
+  return t <= 0 ? 0 : t >= 1 ? BANDS - 1 : Math.floor(t * BANDS);
+}
+
+const CORNERS = [];
+for (let k = 0; k < 8; k++) CORNERS.push([k & 1, (k >> 1) & 1, (k >> 2) & 1]);
+function drawBox() {
+  const pts = CORNERS.map(([a, b, c]) => { project(a * WX, b * WY, c * WZ); return [PX, PY]; });
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) for (const bit of [1, 2, 4]) {
+    const j = i | bit; if (j === i) continue;
+    ctx.moveTo(pts[i][0], pts[i][1]); ctx.lineTo(pts[j][0], pts[j][1]);
+  }
+  ctx.strokeStyle = 'rgba(130,148,180,0.22)'; ctx.lineWidth = 1; ctx.stroke();
+}
+
+function drawObstacle(ob) {
+  project(ob.x, ob.y, ob.z);
+  const r = ob.r * PS;
+  ctx.beginPath(); ctx.arc(PX, PY, r, 0, Math.PI * 2);
+  if (is3D) {
+    const g = ctx.createRadialGradient(PX - r * 0.35, PY - r * 0.4, r * 0.08, PX, PY, r);
+    g.addColorStop(0, '#4a5674'); g.addColorStop(1, '#151a26');
+    ctx.fillStyle = g; ctx.fill();
+  } else {
+    ctx.fillStyle = '#1b2130'; ctx.fill(); ctx.strokeStyle = '#3a4459'; ctx.lineWidth = 1.5; ctx.stroke();
   }
 }
 
 function draw() {
+  updateCamera();
   if (P.trails) { ctx.fillStyle = 'rgba(11,13,18,0.16)'; ctx.fillRect(0, 0, W, H); }
   else { ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, H); }
 
-  // obstacles
-  for (const ob of obstacles) {
-    ctx.beginPath(); ctx.arc(ob.x, ob.y, ob.r, 0, Math.PI * 2);
-    ctx.fillStyle = '#1b2130'; ctx.fill(); ctx.strokeStyle = '#3a4459'; ctx.lineWidth = 1.5; ctx.stroke();
-  }
+  const R = 0.5 * Math.hypot(WX, WY, WZ);
+  const zNear = cam.dist - R, zFar = cam.dist + R;
+  if (is3D) drawBox();
 
-  // bucket boids by colour so each colour is one path / one fill call
+  // bucket boids
   bucketCount.fill(0);
   let maxN = 1;
   if (P.color === 'density') for (let i = 0; i < N; i++) if (nbr[i] > maxN) maxN = nbr[i];
   for (let i = 0; i < N; i++) {
     let b = 0;
-    if (P.color === 'heading') { const a = Math.atan2(vy[i], vx[i]); b = Math.floor((a / (Math.PI * 2) + 1) * BUCKETS) % BUCKETS; }
-    else if (P.color === 'density') b = Math.min(BUCKETS - 1, Math.floor(Math.sqrt(nbr[i] / maxN) * BUCKETS));
-    bucketOf[i] = b; bucketCount[b + 1]++;
+    if (P.color === 'heading') {
+      const a = is3D ? Math.atan2(vz[i], vx[i]) : Math.atan2(vy[i], vx[i]);
+      b = Math.floor((a / (Math.PI * 2) + 1) * BUCKETS) % BUCKETS;
+    } else if (P.color === 'density') b = Math.min(BUCKETS - 1, Math.floor(Math.sqrt(nbr[i] / maxN) * BUCKETS));
+    let band = BANDS - 1;
+    if (is3D) { project(px[i], py[i], pz[i]); band = bandOf(PZ, zNear, zFar); }
+    const key = band * BUCKETS + b;
+    bucketOf[i] = key; bucketCount[key + 1]++;
   }
-  for (let b = 0; b < BUCKETS; b++) bucketCount[b + 1] += bucketCount[b];
-  const fill = bucketCount.slice(0, BUCKETS);
+  for (let k = 0; k < NBK; k++) bucketCount[k + 1] += bucketCount[k];
+  const fill = bucketCount.slice(0, NBK);
   for (let i = 0; i < N; i++) order[fill[bucketOf[i]]++] = i;
 
-  const s = 4.2 * P.size;
-  for (let b = 0; b < BUCKETS; b++) {
-    const lo = bucketCount[b], hi = bucketCount[b + 1];
-    if (lo === hi) continue;
-    ctx.beginPath();
-    for (let k = lo; k < hi; k++) {
-      const i = order[k];
-      const sp = Math.hypot(vx[i], vy[i]) || 1, hx = vx[i] / sp, hy = vy[i] / sp;
-      const x = px[i], y = py[i];
-      ctx.moveTo(x + hx * s * 1.8, y + hy * s * 1.8);
-      ctx.lineTo(x - hx * s + hy * s * 0.85, y - hy * s - hx * s * 0.85);
-      ctx.lineTo(x - hx * s * 0.45, y - hy * s * 0.45);
-      ctx.lineTo(x - hx * s - hy * s * 0.85, y - hy * s + hx * s * 0.85);
-      ctx.closePath();
+  const obBand = obstacles.map(ob => { project(ob.x, ob.y, ob.z); return bandOf(PZ, zNear, zFar); });
+
+  const s = (is3D ? 5.5 : 4.2) * P.size;
+  for (let band = 0; band < BANDS; band++) {
+    for (let o = 0; o < obstacles.length; o++) if (obBand[o] === band) drawObstacle(obstacles[o]);
+    for (let b = 0; b < BUCKETS; b++) {
+      const key = band * BUCKETS + b, lo = bucketCount[key], hi = bucketCount[key + 1];
+      if (lo === hi) continue;
+      ctx.beginPath();
+      for (let k = lo; k < hi; k++) {
+        const i = order[k];
+        const sp = Math.hypot(vx[i], vy[i], vz[i]) || 1, hx = vx[i] / sp, hy = vy[i] / sp, hz = vz[i] / sp;
+        const x = px[i], y = py[i], z = pz[i];
+        project(x, y, z); const cxs = PX, cys = PY, k0 = PS;
+        project(x + hx * s * 1.8, y + hy * s * 1.8, z + hz * s * 1.8); let tx = PX, ty = PY;
+        project(x - hx * s, y - hy * s, z - hz * s); let bx = PX, by = PY;
+        // screen-space body axis; keep a minimum length when the boid points at the camera
+        let axx = tx - bx, ayy = ty - by, la = Math.hypot(axx, ayy);
+        const minL = 1.4 * s * k0;
+        if (la < minL) {
+          if (la < 1e-6) { axx = 0; ayy = -1; la = 1; }
+          const f = minL / la; axx *= f / 1; ayy *= f;
+          tx = cxs + axx * (1.8 / 2.8); ty = cys + ayy * (1.8 / 2.8);
+          bx = cxs - axx * (1 / 2.8); by = cys - ayy * (1 / 2.8);
+          la = minL;
+        }
+        const nx = -ayy / la, ny = axx / la, w = 0.85 * s * k0;
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(bx + nx * w, by + ny * w);
+        ctx.lineTo(cxs + (bx - cxs) * 0.45, cys + (by - cys) * 0.45);
+        ctx.lineTo(bx - nx * w, by - ny * w);
+        ctx.closePath();
+      }
+      ctx.fillStyle = bucketColor[key];
+      ctx.fill();
     }
-    ctx.fillStyle = bucketColor[b];
-    ctx.fill();
   }
 
   if (focus >= 0 && focus < N) drawFocus();
 
-  if (pointer.inside && mode === 'predator') {
-    ctx.beginPath(); ctx.arc(pointer.x, pointer.y, 130, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,110,110,0.18)'; ctx.lineWidth = 1; ctx.stroke();
-    ctx.beginPath(); ctx.arc(pointer.x, pointer.y, 7, 0, Math.PI * 2); ctx.fillStyle = '#ff6e6e'; ctx.fill();
-  } else if (pointer.inside && mode === 'attract') {
-    ctx.beginPath(); ctx.arc(pointer.x, pointer.y, pointer.down ? 10 : 7, 0, Math.PI * 2);
-    ctx.fillStyle = pointer.down ? '#9dffb0' : '#7be08a'; ctx.fill();
+  if (pointer.inside && (mode === 'predator' || mode === 'attract')) {
+    const pr = PRED_R * (is3D ? focal / cam.dist : 1);
+    if (mode === 'predator') {
+      ctx.beginPath(); ctx.arc(pointer.x, pointer.y, pr, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,110,110,0.18)'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.beginPath(); ctx.arc(pointer.x, pointer.y, 7, 0, Math.PI * 2); ctx.fillStyle = '#ff6e6e'; ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(pointer.x, pointer.y, pointer.down ? 10 : 7, 0, Math.PI * 2);
+      ctx.fillStyle = pointer.down ? '#9dffb0' : '#7be08a'; ctx.fill();
+    }
   }
 }
 
+function wrapDelta(dx, dy, dz) {
+  if (P.edges === 'wrap') {
+    if (dx > WX / 2) dx -= WX; else if (dx < -WX / 2) dx += WX;
+    if (dy > WY / 2) dy -= WY; else if (dy < -WY / 2) dy += WY;
+    if (is3D) { if (dz > WZ / 2) dz -= WZ; else if (dz < -WZ / 2) dz += WZ; }
+  }
+  return [dx, dy, dz];
+}
+
 function drawFocus() {
-  const i = focus, x = px[i], y = py[i];
-  const a = Math.atan2(vy[i], vx[i]), half = Math.min(P.fov, 360) / 2 * Math.PI / 180;
-  const wrap = P.edges === 'wrap';
+  const i = focus, x = px[i], y = py[i], z = pz[i];
+  project(x, y, z); const cx = PX, cy = PY, k = PS;
   ctx.save();
-  // field of view sector
+  // perception: a sector in 2D, the neighbour sphere's outline in 3D
   ctx.beginPath();
-  if (P.fov < 360) { ctx.moveTo(x, y); ctx.arc(x, y, P.radius, a - half, a + half); ctx.closePath(); }
-  else ctx.arc(x, y, P.radius, 0, Math.PI * 2);
+  if (!is3D && P.fov < 360) {
+    const a = Math.atan2(vy[i], vx[i]), half = P.fov / 2 * Math.PI / 180;
+    ctx.moveTo(cx, cy); ctx.arc(cx, cy, P.radius, a - half, a + half); ctx.closePath();
+  } else ctx.arc(cx, cy, P.radius * k, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(124,196,255,0.08)'; ctx.fill();
   ctx.strokeStyle = 'rgba(124,196,255,0.45)'; ctx.lineWidth = 1; ctx.stroke();
   // personal space
-  ctx.beginPath(); ctx.arc(x, y, P.sepRadius, 0, Math.PI * 2);
+  ctx.beginPath(); ctx.arc(cx, cy, P.sepRadius * k, 0, Math.PI * 2);
   ctx.setLineDash([3, 3]); ctx.strokeStyle = 'rgba(255,140,120,0.6)'; ctx.stroke(); ctx.setLineDash([]);
   if (focusDebug) {
     ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.beginPath();
     for (const j of focusDebug.seen) {
-      let dx = px[j] - x, dy = py[j] - y;
-      if (wrap) { if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W; if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H; }
-      ctx.moveTo(x, y); ctx.lineTo(x + dx, y + dy);
+      const [dx, dy, dz] = wrapDelta(px[j] - x, py[j] - y, pz[j] - z);
+      project(x + dx, y + dy, z + dz);
+      ctx.moveTo(cx, cy); ctx.lineTo(PX, PY);
     }
     ctx.stroke();
-    const k = 18 / Math.max(P.force, 1e-3); // scale forces so max steering ≈ 18px
+    const kk = 18 / Math.max(P.force, 1e-3); // world units, so max steering ≈ 18 units long
     const arrow = (f, col) => {
-      const l = Math.hypot(f[0], f[1]) * k; if (l < 0.5) return;
-      const ex = x + f[0] * k, ey = y + f[1] * k, ang = Math.atan2(f[1], f[0]);
+      if (Math.hypot(f[0], f[1], f[2]) * kk < 0.5) return;
+      project(x + f[0] * kk, y + f[1] * kk, z + f[2] * kk);
+      const ex = PX, ey = PY, ang = Math.atan2(ey - cy, ex - cx);
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(ex, ey);
       ctx.lineTo(ex - 6 * Math.cos(ang - 0.45), ey - 6 * Math.sin(ang - 0.45));
       ctx.lineTo(ex - 6 * Math.cos(ang + 0.45), ey - 6 * Math.sin(ang + 0.45)); ctx.fill();
     };
     arrow(focusDebug.fSep, '#ff7a6b'); arrow(focusDebug.fAli, '#7be08a'); arrow(focusDebug.fCoh, '#7cc4ff');
   }
-  ctx.beginPath(); ctx.arc(x, y, 4 * P.size + 4, 0, Math.PI * 2); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, (4 * P.size + 4) * (is3D ? Math.max(0.7, k) : 1), 0, Math.PI * 2);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
   ctx.restore();
 }
 
 // ---------- UI ----------
-const outputs = {};
+const outputs = {}, inputs = {};
 function fmt(key, v) {
   if (key === 'count' || key === 'radius' || key === 'sepRadius' || key === 'fov') return String(Math.round(v));
   if (key === 'force') return v.toFixed(3);
   return v.toFixed(2);
 }
-const inputs = {};
 for (const [group, list] of Object.entries(SLIDERS)) {
   const host = document.getElementById(group);
   for (const [key, label, min, max, stepv] of list) {
@@ -456,10 +601,8 @@ function syncUI() {
 }
 
 const presetHost = document.getElementById('presets');
-let currentPreset = 'Flock';
 function applyPreset(name) {
   Object.assign(P, DEFAULTS, PRESETS[name]);
-  currentPreset = name;
   setCount(P.count);
   syncUI();
   for (const b of presetHost.children) b.classList.toggle('on', b.textContent === name);
@@ -471,17 +614,19 @@ for (const name of Object.keys(PRESETS)) {
 }
 
 const MODES = {
-  predator: ['Predator', 'Move the pointer over the flock — boids flee from it.'],
-  attract:  ['Attract', 'The flock is drawn toward the pointer. Hold the button down to pull harder.'],
-  obstacle: ['Obstacle', 'Click to place a rock; drag while placing to size it. Shift-click (or right-click) removes one.'],
-  inspect:  ['Inspect', 'Click a boid to see what it sees: field of view, personal space, neighbours, and its three steering forces (red separation, green alignment, blue cohesion). Click empty space to stop.'],
+  orbit:    ['Orbit', () => 'Drag to rotate the view, scroll to zoom.'],
+  predator: ['Predator', () => 'Move the pointer over the flock — boids flee from it.' + (is3D ? ' Drag to rotate, scroll to zoom.' : '')],
+  attract:  ['Attract', () => 'The flock is drawn toward the pointer. Hold the button down to pull harder.'],
+  obstacle: ['Obstacle', () => (is3D ? 'Click to place a sphere in the middle plane of the box' : 'Click to place a rock') + '; drag while placing to size it. Shift-click (or right-click) removes one.'],
+  inspect:  ['Inspect', () => 'Click a boid to see what it sees: ' + (is3D ? 'neighbour range' : 'field of view') + ', personal space, neighbours, and its three steering forces (red separation, green alignment, blue cohesion). Click empty space to stop.'],
 };
 const modeHost = document.getElementById('modes');
 function setMode(m) {
+  if (m === 'orbit' && !is3D) m = 'predator';
   mode = m;
   for (const b of modeHost.children) b.classList.toggle('on', b.dataset.mode === m);
-  document.getElementById('modehelp').textContent = MODES[m][1];
-  canvas.style.cursor = m === 'predator' || m === 'attract' ? 'none' : m === 'inspect' ? 'pointer' : 'crosshair';
+  document.getElementById('modehelp').textContent = MODES[m][1]();
+  canvas.style.cursor = m === 'orbit' ? 'grab' : m === 'predator' || m === 'attract' ? 'none' : m === 'inspect' ? 'pointer' : 'crosshair';
 }
 for (const [m, [label]] of Object.entries(MODES)) {
   const b = document.createElement('button'); b.textContent = label; b.dataset.mode = m;
@@ -489,9 +634,29 @@ for (const [m, [label]] of Object.entries(MODES)) {
   modeHost.appendChild(b);
 }
 
+const dimHost = document.getElementById('dims');
+function setDim(d, fromHash) {
+  is3D = d === '3d';
+  setDims();
+  obstacles.length = 0; focus = -1;
+  scatter();
+  for (const b of dimHost.children) b.classList.toggle('on', b.dataset.dim === (is3D ? '3d' : '2d'));
+  modeHost.querySelector('[data-mode=orbit]').style.display = is3D ? '' : 'none';
+  document.getElementById('autoRow').style.display = is3D ? '' : 'none';
+  setMode(is3D ? 'orbit' : (mode === 'orbit' ? 'predator' : mode));
+  ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, H);
+  if (!fromHash) { try { history.replaceState(null, '', '#' + (is3D ? '3d' : '2d')); } catch (e) {} }
+}
+for (const b of dimHost.children) b.onclick = () => setDim(b.dataset.dim);
+window.addEventListener('hashchange', () => {
+  const h = location.hash.slice(1);
+  if ((h === '3d') !== is3D && (h === '3d' || h === '2d')) setDim(h, true);
+});
+
 document.getElementById('edges').onchange = e => { P.edges = e.target.value; };
 document.getElementById('color').onchange = e => { P.color = e.target.value; bucketColors(); };
 document.getElementById('trails').onchange = e => { P.trails = e.target.checked; };
+document.getElementById('autorot').onchange = e => { cam.auto = e.target.checked; };
 
 let paused = false, stepOnce = false;
 const pauseBtn = document.getElementById('pause');
@@ -500,52 +665,86 @@ pauseBtn.onclick = togglePause;
 document.getElementById('stepbtn').onclick = () => { if (!paused) togglePause(); stepOnce = true; };
 document.getElementById('reset').onclick = scatter;
 document.getElementById('clearObs').onclick = () => { obstacles.length = 0; };
-const panel = document.getElementById('panel');
 document.getElementById('toggle').onclick = () => panel.classList.remove('hidden');
 
 window.addEventListener('keydown', e => {
   if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.code === 'Space') { e.preventDefault(); togglePause(); }
   else if (e.key === 's' || e.key === 'S') { if (!paused) togglePause(); stepOnce = true; }
   else if (e.key === 'r' || e.key === 'R') scatter();
+  else if (e.key === 'd' || e.key === 'D') setDim(is3D ? '2d' : '3d');
   else if (e.key === 'h' || e.key === 'H') panel.classList.toggle('hidden');
 });
 
 // pointer
-let placing = null;
+let placing = null, orbiting = null;
 function setPointer(e) { const r = canvas.getBoundingClientRect(); pointer.x = e.clientX - r.left; pointer.y = e.clientY - r.top; }
+function pointerWorld() { [pointer.wx, pointer.wy, pointer.wz] = unproject(pointer.x, pointer.y); }
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerenter', e => { pointer.inside = true; setPointer(e); });
-canvas.addEventListener('pointerleave', () => { pointer.inside = false; pointer.down = false; });
+canvas.addEventListener('pointerleave', () => { if (!orbiting && !placing) { pointer.inside = false; pointer.down = false; } });
 canvas.addEventListener('pointermove', e => {
   pointer.inside = true; setPointer(e);
-  if (placing) placing.r = Math.max(8, Math.hypot(pointer.x - placing.x, pointer.y - placing.y));
+  if (orbiting) {
+    cam.yaw = orbiting.yaw + (pointer.x - orbiting.x) * 0.008;
+    cam.pitch = Math.max(-1.45, Math.min(1.45, orbiting.pitch + (pointer.y - orbiting.y) * 0.008));
+  }
+  if (placing) {
+    const scale = is3D ? cam.dist / focal : 1;
+    placing.r = Math.max(8, Math.hypot(pointer.x - placing.sx, pointer.y - placing.sy) * scale);
+  }
 });
 canvas.addEventListener('pointerdown', e => {
   setPointer(e); pointer.inside = true; pointer.down = true;
   canvas.setPointerCapture(e.pointerId);
-  if (mode === 'obstacle') {
+  updateCamera();
+  if (is3D && (mode === 'orbit' || mode === 'predator')) {
+    orbiting = { x: pointer.x, y: pointer.y, yaw: cam.yaw, pitch: cam.pitch };
+    if (mode === 'orbit') canvas.style.cursor = 'grabbing';
+  } else if (mode === 'obstacle') {
     if (e.shiftKey || e.button === 2) {
       let best = -1, bd = Infinity;
-      obstacles.forEach((o, k) => { const d = Math.hypot(o.x - pointer.x, o.y - pointer.y) - o.r; if (d < bd) { bd = d; best = k; } });
+      obstacles.forEach((o, k) => { project(o.x, o.y, o.z); const d = Math.hypot(PX - pointer.x, PY - pointer.y) - o.r * PS; if (d < bd) { bd = d; best = k; } });
       if (best >= 0 && bd < 40) obstacles.splice(best, 1);
-    } else { placing = { x: pointer.x, y: pointer.y, r: 26 }; obstacles.push(placing); }
+    } else {
+      const [x, y, z] = unproject(pointer.x, pointer.y);
+      placing = { x, y, z, r: 26, sx: pointer.x, sy: pointer.y }; obstacles.push(placing);
+    }
   } else if (mode === 'inspect') {
-    let best = -1, bd = 30 * 30;
-    for (let i = 0; i < N; i++) { const d = (px[i] - pointer.x) ** 2 + (py[i] - pointer.y) ** 2; if (d < bd) { bd = d; best = i; } }
+    let best = -1, bd = 30 * 30, bz = Infinity;
+    for (let i = 0; i < N; i++) {
+      project(px[i], py[i], pz[i]);
+      const d = (PX - pointer.x) ** 2 + (PY - pointer.y) ** 2;
+      if (d < bd || (is3D && d < 100 && PZ < bz)) { bd = Math.min(bd, d); best = i; bz = PZ; }
+    }
     focus = best;
   }
 });
 canvas.addEventListener('pointerup', e => {
   pointer.down = false; placing = null;
+  if (orbiting) { orbiting = null; if (mode === 'orbit') canvas.style.cursor = 'grab'; }
   if (e.pointerType !== 'mouse') pointer.inside = false;
 });
+canvas.addEventListener('wheel', e => {
+  if (!is3D) return;
+  e.preventDefault();
+  cam.dist = Math.max(350, Math.min(4000, cam.dist * Math.exp(e.deltaY * 0.001)));
+}, { passive: false });
 
 // ---------- loop ----------
 const hud = document.getElementById('hud');
 let last = performance.now(), acc = 0, frames = 0, fpsT = last, fps = 0;
+function polarisation() {
+  let mx = 0, my = 0, mz = 0;
+  for (let i = 0; i < N; i++) { const s = Math.hypot(vx[i], vy[i], vz[i]) || 1; mx += vx[i] / s; my += vy[i] / s; mz += vz[i] / s; }
+  return N ? Math.hypot(mx, my, mz) / N : 0;
+}
 function frame(now) {
   const dt = Math.min(100, now - last); last = now;
+  if (is3D && cam.auto && !orbiting) cam.yaw += 0.0012 * dt / 16.7;
+  updateCamera();
+  pointerWorld();
   if (!paused) {
     acc += dt;
     let n = 0;
@@ -556,10 +755,8 @@ function frame(now) {
   frames++;
   if (now - fpsT > 500) {
     fps = frames * 1000 / (now - fpsT); frames = 0; fpsT = now;
-    let mx = 0, my = 0, tn = 0;
-    for (let i = 0; i < N; i++) { const s = Math.hypot(vx[i], vy[i]) || 1; mx += vx[i] / s; my += vy[i] / s; tn += nbr[i]; }
-    const order = N ? Math.hypot(mx, my) / N : 0;
-    hud.textContent = `${N} boids · ${fps.toFixed(0)} fps · avg neighbours ${(N ? tn / N : 0).toFixed(1)} · polarisation ${order.toFixed(2)}${paused ? ' · paused' : ''}`;
+    let tn = 0; for (let i = 0; i < N; i++) tn += nbr[i];
+    hud.textContent = `${is3D ? '3D' : '2D'} · ${N} boids · ${fps.toFixed(0)} fps · avg neighbours ${(N ? tn / N : 0).toFixed(1)} · polarisation ${polarisation().toFixed(2)}${paused ? ' · paused' : ''}`;
   }
   requestAnimationFrame(frame);
 }
@@ -567,13 +764,13 @@ function frame(now) {
 window.addEventListener('resize', resize);
 resize();
 bucketColors();
-setMode('predator');
 applyPreset('Flock');
+setDim(location.hash === '#3d' ? '3d' : '2d', true);
 requestAnimationFrame(frame);
 
 // for testing from the console
-window.boids = { _px: px, _py: py, P, step, setCount, scatter, applyPreset, obstacles, get N() { return N; },
-  polarisation() { let mx = 0, my = 0; for (let i = 0; i < N; i++) { const s = Math.hypot(vx[i], vy[i]) || 1; mx += vx[i] / s; my += vy[i] / s; } return Math.hypot(mx, my) / N; } };
+window.boids = { P, step, setCount, scatter, applyPreset, setDim, obstacles, cam, polarisation,
+  _px: px, _py: py, _pz: pz, get N() { return N; }, get is3D() { return is3D; } };
 </script>
 </body>
 </html>
