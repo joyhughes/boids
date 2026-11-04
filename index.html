@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Boids</title>
+<style>
+  :root { --bg:#0b0d12; --panel:rgba(18,21,29,.92); --line:#2a2f3c; --text:#d8dce6; --dim:#8a91a3; --accent:#7cc4ff; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.35 system-ui,-apple-system,Segoe UI,sans-serif; overflow:hidden; }
+  canvas { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; }
+  #panel { position:fixed; top:12px; right:12px; width:270px; max-height:calc(100% - 24px); overflow:auto;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px 14px; backdrop-filter:blur(6px); }
+  #panel.hidden { display:none; }
+  h1 { font-size:15px; margin:0 0 2px; font-weight:600; letter-spacing:.2px; }
+  .sub { color:var(--dim); font-size:11.5px; margin-bottom:10px; }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--dim); margin:14px 0 6px; font-weight:600; }
+  .row { display:grid; grid-template-columns:96px 1fr 40px; align-items:center; gap:6px; margin:3px 0; }
+  .row label { color:var(--text); white-space:nowrap; }
+  .row output { text-align:right; color:var(--dim); font-variant-numeric:tabular-nums; }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+  .seg { display:flex; gap:4px; flex-wrap:wrap; }
+  button, select { background:#1c212d; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font:inherit; cursor:pointer; }
+  button:hover { border-color:#3d4557; }
+  button.on { background:#24405a; border-color:var(--accent); color:#fff; }
+  .seg button { flex:1 1 auto; }
+  .chk { display:flex; align-items:center; gap:6px; margin:4px 0; }
+  .help { color:var(--dim); font-size:11.5px; margin-top:8px; }
+  kbd { background:#1c212d; border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:11px; }
+  #hud { position:fixed; left:12px; bottom:12px; color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums;
+    background:rgba(11,13,18,.6); padding:5px 9px; border-radius:6px; pointer-events:none; }
+  #toggle { position:fixed; top:12px; right:12px; display:none; }
+  #panel.hidden ~ #toggle { display:block; }
+  .legend span { display:inline-block; width:10px; height:3px; margin:0 4px 2px 8px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<aside id="panel">
+  <h1>Boids</h1>
+  <div class="sub">Craig Reynolds’ flocking model (1987): each boid steers by three local rules — separation, alignment, cohesion.</div>
+
+  <h2>Presets</h2>
+  <div class="seg" id="presets"></div>
+
+  <h2>Rules</h2>
+  <div id="rules"></div>
+
+  <h2>Perception</h2>
+  <div id="perception"></div>
+
+  <h2>Motion</h2>
+  <div id="motion"></div>
+
+  <h2>Mouse</h2>
+  <div class="seg" id="modes"></div>
+  <div class="help" id="modehelp"></div>
+
+  <h2>World</h2>
+  <div class="row"><label>Edges</label>
+    <select id="edges" style="grid-column:span 2"><option value="wrap">Wrap (torus)</option><option value="avoid">Steer away from walls</option></select></div>
+  <div class="row"><label>Colour</label>
+    <select id="color" style="grid-column:span 2"><option value="heading">By heading</option><option value="density">By neighbour count</option><option value="mono">Plain</option></select></div>
+  <label class="chk"><input type="checkbox" id="trails"> Trails</label>
+  <div class="seg" style="margin-top:6px">
+    <button id="pause">Pause</button><button id="stepbtn">Step</button><button id="reset">Scatter</button><button id="clearObs">Clear obstacles</button>
+  </div>
+  <div class="help"><kbd>Space</kbd> pause · <kbd>S</kbd> step · <kbd>R</kbd> scatter · <kbd>H</kbd> hide panel</div>
+</aside>
+<button id="toggle">☰ Controls</button>
+<div id="hud"></div>
+
+<script>
+"use strict";
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// ---------- parameters ----------
+const DEFAULTS = {
+  count: 800, speed: 3.2, force: 0.07, radius: 50, sepRadius: 20, fov: 280,
+  sep: 1.5, ali: 1.0, coh: 0.9, noise: 0.0, size: 1.0,
+};
+const P = Object.assign({ edges: 'wrap', color: 'heading', trails: false }, DEFAULTS);
+
+const PRESETS = {
+  'Flock':       {},
+  'School':      { count: 900, speed: 4.0, radius: 42, sepRadius: 16, fov: 220, sep: 1.4, ali: 1.8, coh: 1.1, size: 0.9 },
+  'Murmuration': { count: 2500, speed: 3.6, force: 0.09, radius: 34, sepRadius: 11, fov: 300, sep: 1.6, ali: 1.4, coh: 0.8, size: 0.65 },
+  'Swarm':       { count: 700, speed: 2.6, force: 0.12, radius: 60, sepRadius: 18, fov: 360, sep: 1.3, ali: 0.15, coh: 1.3, noise: 0.25 },
+  'Gas':         { count: 800, sep: 1.6, ali: 0, coh: 0, fov: 360 },
+};
+
+const SLIDERS = {
+  rules: [
+    ['sep', 'Separation', 0, 4, 0.05],
+    ['ali', 'Alignment', 0, 4, 0.05],
+    ['coh', 'Cohesion', 0, 4, 0.05],
+  ],
+  perception: [
+    ['radius', 'Neighbour radius', 5, 150, 1],
+    ['sepRadius', 'Personal space', 2, 80, 1],
+    ['fov', 'Field of view°', 30, 360, 5],
+  ],
+  motion: [
+    ['count', 'Boids', 1, 6000, 1],
+    ['speed', 'Max speed', 0.5, 8, 0.1],
+    ['force', 'Max steering', 0.005, 0.4, 0.005],
+    ['noise', 'Wander', 0, 1, 0.01],
+    ['size', 'Size', 0.3, 3, 0.05],
+  ],
+};
+
+// ---------- boid state (structure of arrays) ----------
+const MAX = 6000;
+const px = new Float32Array(MAX), py = new Float32Array(MAX);
+const vx = new Float32Array(MAX), vy = new Float32Array(MAX);
+const ax = new Float32Array(MAX), ay = new Float32Array(MAX);
+const nbr = new Uint16Array(MAX);
+let N = 0;
+
+let W = 0, H = 0, dpr = 1;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, H);
+}
+
+function spawn(i) {
+  px[i] = Math.random() * W; py[i] = Math.random() * H;
+  const a = Math.random() * Math.PI * 2, s = P.speed * (0.5 + 0.5 * Math.random());
+  vx[i] = Math.cos(a) * s; vy[i] = Math.sin(a) * s;
+}
+function setCount(n) {
+  n = Math.max(0, Math.min(MAX, n | 0));
+  for (let i = N; i < n; i++) spawn(i);
+  N = n;
+  if (focus >= N) focus = -1;
+}
+function scatter() { for (let i = 0; i < N; i++) spawn(i); }
+
+// ---------- obstacles & pointer ----------
+const obstacles = [];
+const pointer = { x: 0, y: 0, inside: false, down: false };
+let mode = 'predator';
+let focus = -1;
+let focusDebug = null;
+
+// ---------- uniform grid for neighbour lookup ----------
+let gcols = 1, grows = 1, cw = 1, ch = 1;
+let cellStart = new Int32Array(2), cellFill = new Int32Array(2);
+const cellIdx = new Int32Array(MAX), boidCell = new Int32Array(MAX);
+const colList = [0, 0, 0], rowList = [0, 0, 0];
+
+function buildGrid() {
+  const size = Math.max(P.radius, P.sepRadius, 8);
+  gcols = Math.max(1, Math.floor(W / size)); grows = Math.max(1, Math.floor(H / size));
+  cw = W / gcols; ch = H / grows;            // cells are at least `size` wide, so 3x3 covers the radius
+  const nc = gcols * grows;
+  if (cellStart.length < nc + 1) { cellStart = new Int32Array(nc + 1); cellFill = new Int32Array(nc + 1); }
+  else cellStart.fill(0, 0, nc + 1);
+  for (let i = 0; i < N; i++) {
+    let cx = Math.floor(px[i] / cw), cy = Math.floor(py[i] / ch);
+    cx = cx < 0 ? 0 : cx >= gcols ? gcols - 1 : cx;
+    cy = cy < 0 ? 0 : cy >= grows ? grows - 1 : cy;
+    const c = cy * gcols + cx;
+    boidCell[i] = c; cellStart[c + 1]++;
+  }
+  for (let c = 0; c < nc; c++) cellStart[c + 1] += cellStart[c];
+  cellFill.set(cellStart.subarray(0, nc));
+  for (let i = 0; i < N; i++) cellIdx[cellFill[boidCell[i]]++] = i;
+}
+
+// unique neighbouring column/row indices (handles grids narrower than 3 cells)
+function neighbours(list, c, n, wrap) {
+  let k = 0;
+  for (let d = -1; d <= 1; d++) {
+    let v = c + d;
+    if (wrap) v = (v + n) % n; else if (v < 0 || v >= n) continue;
+    let dup = false;
+    for (let m = 0; m < k; m++) if (list[m] === v) dup = true;
+    if (!dup) list[k++] = v;
+  }
+  return k;
+}
+
+// ---------- Reynolds steering:  steer = desired_velocity - velocity, truncated to max force ----------
+let sx_ = 0, sy_ = 0;
+function steer(dx, dy, ux, uy, maxS, maxF) {
+  const l = Math.hypot(dx, dy);
+  if (l < 1e-9) { sx_ = 0; sy_ = 0; return; }
+  let fx = dx / l * maxS - ux, fy = dy / l * maxS - uy;
+  const f = Math.hypot(fx, fy);
+  if (f > maxF) { fx *= maxF / f; fy *= maxF / f; }
+  sx_ = fx; sy_ = fy;
+}
+
+function step() {
+  buildGrid();
+  const wrap = P.edges === 'wrap';
+  const r2 = P.radius * P.radius, s2 = P.sepRadius * P.sepRadius;
+  const cosHalf = P.fov >= 360 ? -2 : Math.cos(P.fov / 2 * Math.PI / 180);
+  const maxS = P.speed, maxF = P.force;
+  const hw = W / 2, hh = H / 2;
+  const debug = focus >= 0 && focus < N;
+  focusDebug = null;
+
+  for (let i = 0; i < N; i++) {
+    const x = px[i], y = py[i], ux = vx[i], uy = vy[i];
+    const sp = Math.hypot(ux, uy) || 1, hx = ux / sp, hy = uy / sp;
+    let n = 0, avx = 0, avy = 0, cx = 0, cy = 0, sx = 0, sy = 0, ns = 0;
+    const isFocus = debug && i === focus;
+    const seen = isFocus ? [] : null;
+
+    const c = boidCell[i], gx = c % gcols, gy = (c / gcols) | 0;
+    const nCols = neighbours(colList, gx, gcols, wrap), nRows = neighbours(rowList, gy, grows, wrap);
+    for (let a = 0; a < nRows; a++) {
+      const rowBase = rowList[a] * gcols;
+      for (let b = 0; b < nCols; b++) {
+        const cell = rowBase + colList[b];
+        for (let k = cellStart[cell], e = cellStart[cell + 1]; k < e; k++) {
+          const j = cellIdx[k];
+          if (j === i) continue;
+          let dx = px[j] - x, dy = py[j] - y;
+          if (wrap) {
+            if (dx > hw) dx -= W; else if (dx < -hw) dx += W;
+            if (dy > hh) dy -= H; else if (dy < -hh) dy += H;
+          }
+          const d2 = dx * dx + dy * dy;
+          if (d2 > r2 || d2 < 1e-6) continue;
+          const d = Math.sqrt(d2);
+          if ((dx * hx + dy * hy) / d < cosHalf) continue;   // behind the boid: outside its field of view
+          n++; avx += vx[j]; avy += vy[j]; cx += dx; cy += dy;
+          if (d2 < s2) { sx -= dx / d2; sy -= dy / d2; ns++; } // repulsion weighted by 1/distance
+          if (seen) seen.push(j);
+        }
+      }
+    }
+    nbr[i] = n;
+
+    let fx = 0, fy = 0;
+    let fSep = [0, 0], fAli = [0, 0], fCoh = [0, 0];
+    if (ns) { steer(sx, sy, ux, uy, maxS, maxF); fx += P.sep * sx_; fy += P.sep * sy_; if (isFocus) fSep = [P.sep * sx_, P.sep * sy_]; }
+    if (n) {
+      steer(avx, avy, ux, uy, maxS, maxF); fx += P.ali * sx_; fy += P.ali * sy_; if (isFocus) fAli = [P.ali * sx_, P.ali * sy_];
+      steer(cx, cy, ux, uy, maxS, maxF);   fx += P.coh * sx_; fy += P.coh * sy_; if (isFocus) fCoh = [P.coh * sx_, P.coh * sy_];
+    }
+
+    // obstacles: steer away, stronger the closer we get
+    for (let o = 0; o < obstacles.length; o++) {
+      const ob = obstacles[o];
+      const dx = x - ob.x, dy = y - ob.y, d = Math.hypot(dx, dy);
+      const reach = ob.r + Math.max(30, P.radius);
+      if (d < reach && d > 1e-6) {
+        const t = 1 - Math.max(0, d - ob.r) / (reach - ob.r);
+        // blend radial push with a sidestep along the tangent the boid is already turning toward
+        const side = (dx * hy - dy * hx) > 0 ? 1 : -1;
+        const tx = -dy / d * side, ty = dx / d * side;
+        steer(dx / d + tx * 0.7, dy / d + ty * 0.7, ux, uy, maxS, maxF);
+        fx += 4 * t * t * sx_ * (1 + t); fy += 4 * t * t * sy_ * (1 + t);
+      }
+    }
+
+    // walls (when not wrapping): Reynolds' containment
+    if (!wrap) {
+      const m = Math.min(80, Math.min(W, H) * 0.15);
+      let ex = 0, ey = 0, t = 0;
+      if (x < m) { ex = 1; t = Math.max(t, 1 - x / m); } else if (x > W - m) { ex = -1; t = Math.max(t, 1 - (W - x) / m); }
+      if (y < m) { ey = 1; t = Math.max(t, 1 - y / m); } else if (y > H - m) { ey = -1; t = Math.max(t, 1 - (H - y) / m); }
+      if (ex || ey) { steer(ex, ey, ux, uy, maxS, maxF); fx += 3 * t * sx_; fy += 3 * t * sy_; }
+    }
+
+    // pointer: predator to flee from, or a target to seek
+    if (pointer.inside && (mode === 'predator' || mode === 'attract')) {
+      let dx = pointer.x - x, dy = pointer.y - y;
+      if (wrap) {
+        if (dx > hw) dx -= W; else if (dx < -hw) dx += W;
+        if (dy > hh) dy -= H; else if (dy < -hh) dy += H;
+      }
+      const d = Math.hypot(dx, dy);
+      if (mode === 'predator') {
+        const R = 130;
+        if (d < R) { const t = 1 - d / R; steer(-dx, -dy, ux, uy, maxS * 1.6, maxF * 3); fx += 3 * t * sx_; fy += 3 * t * sy_; }
+      } else {
+        steer(dx, dy, ux, uy, maxS, maxF); const w = pointer.down ? 3 : 1.5; fx += w * sx_; fy += w * sy_;
+      }
+    }
+
+    if (P.noise > 0) { const a = Math.random() * Math.PI * 2, m = P.noise * maxF * 2; fx += Math.cos(a) * m; fy += Math.sin(a) * m; }
+
+    ax[i] = fx; ay[i] = fy;
+    if (isFocus) focusDebug = { seen, fSep, fAli, fCoh };
+  }
+
+  // integrate all boids after every force is computed, so update order doesn't matter
+  const minS = maxS * 0.35;
+  for (let i = 0; i < N; i++) {
+    let ux = vx[i] + ax[i], uy = vy[i] + ay[i];
+    const s = Math.hypot(ux, uy);
+    if (s > maxS) { ux *= maxS / s; uy *= maxS / s; }
+    else if (s < minS) { if (s < 1e-6) { ux = minS; uy = 0; } else { ux *= minS / s; uy *= minS / s; } }
+    vx[i] = ux; vy[i] = uy;
+    let x = px[i] + ux, y = py[i] + uy;
+    if (wrap) {
+      if (x < 0) x += W; else if (x >= W) x -= W;
+      if (y < 0) y += H; else if (y >= H) y -= H;
+      if (x < 0 || x >= W) x = ((x % W) + W) % W;
+      if (y < 0 || y >= H) y = ((y % H) + H) % H;
+    } else {
+      if (x < 0) { x = 0; vx[i] = Math.abs(ux); } else if (x > W) { x = W; vx[i] = -Math.abs(ux); }
+      if (y < 0) { y = 0; vy[i] = Math.abs(uy); } else if (y > H) { y = H; vy[i] = -Math.abs(uy); }
+    }
+    // never end a step inside an obstacle
+    for (let o = 0; o < obstacles.length; o++) {
+      const ob = obstacles[o], dx = x - ob.x, dy = y - ob.y, d = Math.hypot(dx, dy);
+      if (d < ob.r + 1) { const k = (ob.r + 1) / (d || 1); x = ob.x + (d ? dx : 1) * k; y = ob.y + (d ? dy : 0) * k; }
+    }
+    px[i] = x; py[i] = y;
+  }
+}
+
+// ---------- rendering ----------
+const BUCKETS = 48;
+const bucketOf = new Uint8Array(MAX), bucketCount = new Int32Array(BUCKETS + 1), order = new Int32Array(MAX);
+const bucketColor = [];
+function bucketColors() {
+  bucketColor.length = 0;
+  for (let b = 0; b < BUCKETS; b++) {
+    if (P.color === 'heading') bucketColor.push(`hsl(${(b / BUCKETS * 360) | 0},72%,64%)`);
+    else if (P.color === 'density') { const t = b / (BUCKETS - 1); bucketColor.push(`hsl(${(220 - 200 * t) | 0},${60 + 25 * t | 0}%,${45 + 25 * t | 0}%)`); }
+    else bucketColor.push('#cfd6e4');
+  }
+}
+
+function draw() {
+  if (P.trails) { ctx.fillStyle = 'rgba(11,13,18,0.16)'; ctx.fillRect(0, 0, W, H); }
+  else { ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, H); }
+
+  // obstacles
+  for (const ob of obstacles) {
+    ctx.beginPath(); ctx.arc(ob.x, ob.y, ob.r, 0, Math.PI * 2);
+    ctx.fillStyle = '#1b2130'; ctx.fill(); ctx.strokeStyle = '#3a4459'; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+
+  // bucket boids by colour so each colour is one path / one fill call
+  bucketCount.fill(0);
+  let maxN = 1;
+  if (P.color === 'density') for (let i = 0; i < N; i++) if (nbr[i] > maxN) maxN = nbr[i];
+  for (let i = 0; i < N; i++) {
+    let b = 0;
+    if (P.color === 'heading') { const a = Math.atan2(vy[i], vx[i]); b = Math.floor((a / (Math.PI * 2) + 1) * BUCKETS) % BUCKETS; }
+    else if (P.color === 'density') b = Math.min(BUCKETS - 1, Math.floor(Math.sqrt(nbr[i] / maxN) * BUCKETS));
+    bucketOf[i] = b; bucketCount[b + 1]++;
+  }
+  for (let b = 0; b < BUCKETS; b++) bucketCount[b + 1] += bucketCount[b];
+  const fill = bucketCount.slice(0, BUCKETS);
+  for (let i = 0; i < N; i++) order[fill[bucketOf[i]]++] = i;
+
+  const s = 4.2 * P.size;
+  for (let b = 0; b < BUCKETS; b++) {
+    const lo = bucketCount[b], hi = bucketCount[b + 1];
+    if (lo === hi) continue;
+    ctx.beginPath();
+    for (let k = lo; k < hi; k++) {
+      const i = order[k];
+      const sp = Math.hypot(vx[i], vy[i]) || 1, hx = vx[i] / sp, hy = vy[i] / sp;
+      const x = px[i], y = py[i];
+      ctx.moveTo(x + hx * s * 1.8, y + hy * s * 1.8);
+      ctx.lineTo(x - hx * s + hy * s * 0.85, y - hy * s - hx * s * 0.85);
+      ctx.lineTo(x - hx * s * 0.45, y - hy * s * 0.45);
+      ctx.lineTo(x - hx * s - hy * s * 0.85, y - hy * s + hx * s * 0.85);
+      ctx.closePath();
+    }
+    ctx.fillStyle = bucketColor[b];
+    ctx.fill();
+  }
+
+  if (focus >= 0 && focus < N) drawFocus();
+
+  if (pointer.inside && mode === 'predator') {
+    ctx.beginPath(); ctx.arc(pointer.x, pointer.y, 130, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,110,110,0.18)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.beginPath(); ctx.arc(pointer.x, pointer.y, 7, 0, Math.PI * 2); ctx.fillStyle = '#ff6e6e'; ctx.fill();
+  } else if (pointer.inside && mode === 'attract') {
+    ctx.beginPath(); ctx.arc(pointer.x, pointer.y, pointer.down ? 10 : 7, 0, Math.PI * 2);
+    ctx.fillStyle = pointer.down ? '#9dffb0' : '#7be08a'; ctx.fill();
+  }
+}
+
+function drawFocus() {
+  const i = focus, x = px[i], y = py[i];
+  const a = Math.atan2(vy[i], vx[i]), half = Math.min(P.fov, 360) / 2 * Math.PI / 180;
+  const wrap = P.edges === 'wrap';
+  ctx.save();
+  // field of view sector
+  ctx.beginPath();
+  if (P.fov < 360) { ctx.moveTo(x, y); ctx.arc(x, y, P.radius, a - half, a + half); ctx.closePath(); }
+  else ctx.arc(x, y, P.radius, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(124,196,255,0.08)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(124,196,255,0.45)'; ctx.lineWidth = 1; ctx.stroke();
+  // personal space
+  ctx.beginPath(); ctx.arc(x, y, P.sepRadius, 0, Math.PI * 2);
+  ctx.setLineDash([3, 3]); ctx.strokeStyle = 'rgba(255,140,120,0.6)'; ctx.stroke(); ctx.setLineDash([]);
+  if (focusDebug) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.beginPath();
+    for (const j of focusDebug.seen) {
+      let dx = px[j] - x, dy = py[j] - y;
+      if (wrap) { if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W; if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H; }
+      ctx.moveTo(x, y); ctx.lineTo(x + dx, y + dy);
+    }
+    ctx.stroke();
+    const k = 18 / Math.max(P.force, 1e-3); // scale forces so max steering ≈ 18px
+    const arrow = (f, col) => {
+      const l = Math.hypot(f[0], f[1]) * k; if (l < 0.5) return;
+      const ex = x + f[0] * k, ey = y + f[1] * k, ang = Math.atan2(f[1], f[0]);
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - 6 * Math.cos(ang - 0.45), ey - 6 * Math.sin(ang - 0.45));
+      ctx.lineTo(ex - 6 * Math.cos(ang + 0.45), ey - 6 * Math.sin(ang + 0.45)); ctx.fill();
+    };
+    arrow(focusDebug.fSep, '#ff7a6b'); arrow(focusDebug.fAli, '#7be08a'); arrow(focusDebug.fCoh, '#7cc4ff');
+  }
+  ctx.beginPath(); ctx.arc(x, y, 4 * P.size + 4, 0, Math.PI * 2); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.restore();
+}
+
+// ---------- UI ----------
+const outputs = {};
+function fmt(key, v) {
+  if (key === 'count' || key === 'radius' || key === 'sepRadius' || key === 'fov') return String(Math.round(v));
+  if (key === 'force') return v.toFixed(3);
+  return v.toFixed(2);
+}
+const inputs = {};
+for (const [group, list] of Object.entries(SLIDERS)) {
+  const host = document.getElementById(group);
+  for (const [key, label, min, max, stepv] of list) {
+    const row = document.createElement('div'); row.className = 'row';
+    row.innerHTML = `<label for="s-${key}">${label}</label><input id="s-${key}" type="range" min="${min}" max="${max}" step="${stepv}"><output></output>`;
+    host.appendChild(row);
+    const inp = row.querySelector('input'), out = row.querySelector('output');
+    inputs[key] = inp; outputs[key] = out;
+    inp.addEventListener('input', () => {
+      P[key] = parseFloat(inp.value); out.textContent = fmt(key, P[key]);
+      if (key === 'count') setCount(P.count);
+    });
+  }
+}
+function syncUI() {
+  for (const k in inputs) { inputs[k].value = P[k]; outputs[k].textContent = fmt(k, P[k]); }
+  document.getElementById('edges').value = P.edges;
+  document.getElementById('color').value = P.color;
+  document.getElementById('trails').checked = P.trails;
+}
+
+const presetHost = document.getElementById('presets');
+let currentPreset = 'Flock';
+function applyPreset(name) {
+  Object.assign(P, DEFAULTS, PRESETS[name]);
+  currentPreset = name;
+  setCount(P.count);
+  syncUI();
+  for (const b of presetHost.children) b.classList.toggle('on', b.textContent === name);
+}
+for (const name of Object.keys(PRESETS)) {
+  const b = document.createElement('button'); b.textContent = name;
+  b.onclick = () => applyPreset(name);
+  presetHost.appendChild(b);
+}
+
+const MODES = {
+  predator: ['Predator', 'Move the pointer over the flock — boids flee from it.'],
+  attract:  ['Attract', 'The flock is drawn toward the pointer. Hold the button down to pull harder.'],
+  obstacle: ['Obstacle', 'Click to place a rock; drag while placing to size it. Shift-click (or right-click) removes one.'],
+  inspect:  ['Inspect', 'Click a boid to see what it sees: field of view, personal space, neighbours, and its three steering forces (red separation, green alignment, blue cohesion). Click empty space to stop.'],
+};
+const modeHost = document.getElementById('modes');
+function setMode(m) {
+  mode = m;
+  for (const b of modeHost.children) b.classList.toggle('on', b.dataset.mode === m);
+  document.getElementById('modehelp').textContent = MODES[m][1];
+  canvas.style.cursor = m === 'predator' || m === 'attract' ? 'none' : m === 'inspect' ? 'pointer' : 'crosshair';
+}
+for (const [m, [label]] of Object.entries(MODES)) {
+  const b = document.createElement('button'); b.textContent = label; b.dataset.mode = m;
+  b.onclick = () => setMode(m);
+  modeHost.appendChild(b);
+}
+
+document.getElementById('edges').onchange = e => { P.edges = e.target.value; };
+document.getElementById('color').onchange = e => { P.color = e.target.value; bucketColors(); };
+document.getElementById('trails').onchange = e => { P.trails = e.target.checked; };
+
+let paused = false, stepOnce = false;
+const pauseBtn = document.getElementById('pause');
+function togglePause() { paused = !paused; pauseBtn.textContent = paused ? 'Play' : 'Pause'; pauseBtn.classList.toggle('on', paused); }
+pauseBtn.onclick = togglePause;
+document.getElementById('stepbtn').onclick = () => { if (!paused) togglePause(); stepOnce = true; };
+document.getElementById('reset').onclick = scatter;
+document.getElementById('clearObs').onclick = () => { obstacles.length = 0; };
+const panel = document.getElementById('panel');
+document.getElementById('toggle').onclick = () => panel.classList.remove('hidden');
+
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+  if (e.code === 'Space') { e.preventDefault(); togglePause(); }
+  else if (e.key === 's' || e.key === 'S') { if (!paused) togglePause(); stepOnce = true; }
+  else if (e.key === 'r' || e.key === 'R') scatter();
+  else if (e.key === 'h' || e.key === 'H') panel.classList.toggle('hidden');
+});
+
+// pointer
+let placing = null;
+function setPointer(e) { const r = canvas.getBoundingClientRect(); pointer.x = e.clientX - r.left; pointer.y = e.clientY - r.top; }
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('pointerenter', e => { pointer.inside = true; setPointer(e); });
+canvas.addEventListener('pointerleave', () => { pointer.inside = false; pointer.down = false; });
+canvas.addEventListener('pointermove', e => {
+  pointer.inside = true; setPointer(e);
+  if (placing) placing.r = Math.max(8, Math.hypot(pointer.x - placing.x, pointer.y - placing.y));
+});
+canvas.addEventListener('pointerdown', e => {
+  setPointer(e); pointer.inside = true; pointer.down = true;
+  canvas.setPointerCapture(e.pointerId);
+  if (mode === 'obstacle') {
+    if (e.shiftKey || e.button === 2) {
+      let best = -1, bd = Infinity;
+      obstacles.forEach((o, k) => { const d = Math.hypot(o.x - pointer.x, o.y - pointer.y) - o.r; if (d < bd) { bd = d; best = k; } });
+      if (best >= 0 && bd < 40) obstacles.splice(best, 1);
+    } else { placing = { x: pointer.x, y: pointer.y, r: 26 }; obstacles.push(placing); }
+  } else if (mode === 'inspect') {
+    let best = -1, bd = 30 * 30;
+    for (let i = 0; i < N; i++) { const d = (px[i] - pointer.x) ** 2 + (py[i] - pointer.y) ** 2; if (d < bd) { bd = d; best = i; } }
+    focus = best;
+  }
+});
+canvas.addEventListener('pointerup', e => {
+  pointer.down = false; placing = null;
+  if (e.pointerType !== 'mouse') pointer.inside = false;
+});
+
+// ---------- loop ----------
+const hud = document.getElementById('hud');
+let last = performance.now(), acc = 0, frames = 0, fpsT = last, fps = 0;
+function frame(now) {
+  const dt = Math.min(100, now - last); last = now;
+  if (!paused) {
+    acc += dt;
+    let n = 0;
+    while (acc >= 1000 / 60 && n < 3) { step(); acc -= 1000 / 60; n++; }
+    if (n === 3) acc = 0;
+  } else if (stepOnce) { step(); stepOnce = false; }
+  draw();
+  frames++;
+  if (now - fpsT > 500) {
+    fps = frames * 1000 / (now - fpsT); frames = 0; fpsT = now;
+    let mx = 0, my = 0, tn = 0;
+    for (let i = 0; i < N; i++) { const s = Math.hypot(vx[i], vy[i]) || 1; mx += vx[i] / s; my += vy[i] / s; tn += nbr[i]; }
+    const order = N ? Math.hypot(mx, my) / N : 0;
+    hud.textContent = `${N} boids · ${fps.toFixed(0)} fps · avg neighbours ${(N ? tn / N : 0).toFixed(1)} · polarisation ${order.toFixed(2)}${paused ? ' · paused' : ''}`;
+  }
+  requestAnimationFrame(frame);
+}
+
+window.addEventListener('resize', resize);
+resize();
+bucketColors();
+setMode('predator');
+applyPreset('Flock');
+requestAnimationFrame(frame);
+
+// for testing from the console
+window.boids = { _px: px, _py: py, P, step, setCount, scatter, applyPreset, obstacles, get N() { return N; },
+  polarisation() { let mx = 0, my = 0; for (let i = 0; i < N; i++) { const s = Math.hypot(vx[i], vy[i]) || 1; mx += vx[i] / s; my += vy[i] / s; } return Math.hypot(mx, my) / N; } };
+</script>
+</body>
+</html>
