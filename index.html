@@ -8,10 +8,20 @@
   :root { --bg:#0b0d12; --panel:rgba(18,21,29,.92); --line:#2a2f3c; --text:#d8dce6; --dim:#8a91a3; --accent:#7cc4ff; }
   * { box-sizing:border-box; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.35 system-ui,-apple-system,Segoe UI,sans-serif; overflow:hidden; }
-  canvas#c { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; }
-  #panel { position:fixed; top:12px; right:12px; width:280px; max-height:calc(100% - 24px); overflow:auto;
-    background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px 14px; backdrop-filter:blur(6px); }
+  /* the controls sit beside the view (below it on narrow screens), never on top of it */
+  :root { --side:300px; --below:44vh; }
+  canvas#c { position:fixed; left:0; top:0; width:calc(100% - var(--side)); height:100%; display:block; touch-action:none; }
+  #panel { position:fixed; top:0; right:0; bottom:0; width:var(--side); overflow:auto;
+    background:#12151d; border-left:1px solid var(--line); padding:12px 14px 14px; }
   #panel.hidden { display:none; }
+  body.nopanel canvas#c { width:100%; height:100%; }
+  #hidePanel { float:right; padding:2px 8px; font-size:12px; }
+  @media (max-width: 700px) {
+    canvas#c { width:100%; height:calc(100% - var(--below)); }
+    #panel { top:auto; left:0; width:auto; height:var(--below); border-left:none; border-top:1px solid var(--line); }
+    #hud { bottom:calc(var(--below) + 12px) !important; }
+    body.nopanel #hud { bottom:12px !important; }
+  }
   h1 { font-size:15px; margin:0 0 2px; font-weight:600; letter-spacing:.2px; }
   .sub { color:var(--dim); font-size:11.5px; margin-bottom:10px; }
   h2 { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--dim); margin:14px 0 6px; font-weight:600; }
@@ -54,6 +64,7 @@
 <body>
 <canvas id="c"></canvas>
 <aside id="panel">
+  <button id="hidePanel" title="Hide the controls (H)">Hide ›</button>
   <h1>Boids</h1>
   <div class="sub">Craig Reynolds’ flocking model (1987): each boid steers by three local rules — separation, alignment, cohesion.</div>
 
@@ -197,7 +208,8 @@ function setDims() {
 }
 function resize() {
   dpr = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth; H = window.innerHeight;
+  const rect = canvas.getBoundingClientRect();   // the view is whatever the panel leaves free
+  W = Math.max(1, Math.round(rect.width)); H = Math.max(1, Math.round(rect.height));
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, H);
@@ -208,7 +220,7 @@ function resize() {
 // ---------- camera (3D only) ----------
 function updateCamera() {
   cY = Math.cos(cam.yaw); sY = Math.sin(cam.yaw); cP = Math.cos(cam.pitch); sP = Math.sin(cam.pitch);
-  scx = (!panel.classList.contains('hidden') && W > 760) ? (W - 306) / 2 : W / 2;
+  scx = W / 2;
   scy = H / 2;
 }
 let PX = 0, PY = 0, PZ = 0, PS = 1;   // last projection: screen x, y, depth, pixels per world unit
@@ -235,6 +247,7 @@ const px = new Float32Array(MAX), py = new Float32Array(MAX), pz = new Float32Ar
 const vx = new Float32Array(MAX), vy = new Float32Array(MAX), vz = new Float32Array(MAX);
 const ax = new Float32Array(MAX), ay = new Float32Array(MAX), az = new Float32Array(MAX);
 const nbr = new Uint16Array(MAX);
+const inPen = new Uint8Array(MAX);   // sheepdog rounds: boids inside the pen settle down
 const pcx = new Float32Array(MAX), pcy = new Float32Array(MAX), pcz = new Float32Array(MAX);   // body-overlap corrections
 // genes: weights for separation, alignment, cohesion and fleeing.  They always sum to geneSum,
 // so evolution can only re-allocate a fixed steering budget, never buy more agility.
@@ -356,6 +369,7 @@ function bestPred() { return preds.reduce((a, b) => predRate(b) > predRate(a) ? 
 let edgesBeforeDogs = null;
 function setHunterMode(m) {
   if (m === hunterMode) return;
+  inPen.fill(0);
   if (m !== 'none' && show.on) stopShow();
   if (hunterMode === 'dogs' && edgesBeforeDogs) { P.edges = edgesBeforeDogs; edgesBeforeDogs = null; }
   hunterMode = m;
@@ -567,7 +581,7 @@ function step() {
       continue;
     }
 
-    const wS = evolving ? gS[i] : P.sep, wA = evolving ? gA[i] : P.ali, wC = evolving ? gC[i] : P.coh, wF = evolving ? gF[i] : FLEE_W;
+    const wS = evolving ? gS[i] : P.sep, wA = evolving ? gA[i] : P.ali, wC = evolving ? gC[i] : P.coh, wF = inPen[i] ? 0 : evolving ? gF[i] : FLEE_W;
     let fx = 0, fy = 0, fz = 0;
     let fSep = [0, 0, 0], fAli = [0, 0, 0], fCoh = [0, 0, 0];
     if (ns) {
@@ -627,7 +641,8 @@ function step() {
   for (let i = 0; i < N; i++) {
     let ux = vx[i] + ax[i], uy = vy[i] + ay[i], uz = vz[i] + az[i];
     const s = Math.hypot(ux, uy, uz);
-    if (s > capS) { const k = capS / s; ux *= k; uy *= k; uz *= k; }
+    const cap = inPen[i] ? capS * 0.4 : capS;   // penned sheep amble
+    if (s > cap) { const k = cap / s; ux *= k; uy *= k; uz *= k; }
     else if (s < minS) { if (s < 1e-6) { ux = minS; uy = 0; uz = 0; } else { const k = minS / s; ux *= k; uy *= k; uz *= k; } }
     vtmp[0] = ux; vtmp[1] = uy; vtmp[2] = uz;
     confine(px[i] + ux + pcx[i], py[i] + uy + pcy[i], pz[i] + uz + pcz[i], vtmp);
@@ -794,20 +809,25 @@ function recordEvo() {
 }
 
 // ---------- sheepdogs ----------
+// pen size: room for the whole flock at a comfortable spacing (never less than the boids' real body size)
+// and never smaller than a fair share of the field, however small Personal space is set
 function penRadius() {
-  return is3D ? Math.cbrt(3 * N / (4 * Math.PI)) * P.sepRadius * 1.6 : Math.sqrt(N / Math.PI) * P.sepRadius * 1.4;
+  const spacing = Math.max(P.sepRadius, 14 * P.size);
+  return is3D ? Math.max(Math.cbrt(3 * N / (4 * Math.PI)) * spacing * 1.7, 0.2 * Math.min(WX, WY, WZ))
+              : Math.max(Math.sqrt(N / Math.PI) * spacing * 1.5, 0.13 * Math.min(WX, WY));
 }
 function newRound() {
   const r = penRadius(), inset = r + 20;
   let corners;
   if (is3D) { corners = []; for (let k = 0; k < 8; k++) corners.push([k & 1, (k >> 1) & 1, (k >> 2) & 1]); }
-  else corners = [[0, 0, 0], [0, 1, 0], [1, 1, 0]];     // the top-right corner sits under the panel
+  else corners = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]];
   const prev = herd.pen;
   let c;
   do { c = corners[(rand() * corners.length) | 0]; }
   while (corners.length > 1 && Math.abs((c[0] ? WX - inset : inset) - prev.x) < 1 && Math.abs((c[1] ? WY - inset : inset) - prev.y) < 1 && Math.abs((is3D ? (c[2] ? WZ - inset : inset) : 0) - prev.z) < 1);
   herd.pen = { x: c[0] ? WX - inset : inset, y: c[1] ? WY - inset : inset, z: is3D ? (c[2] ? WZ - inset : inset) : 0, r };
   herd.steps = 0; herd.round++;
+  inPen.fill(0);
   // choose which herding genes this round tests
   if ($('dogLearn').checked && herd.incFit !== null && herd.trying === 'inc') { herd.cand = mutateDog(herd.inc); herd.trying = 'cand'; }
   else herd.trying = 'inc';
@@ -844,7 +864,8 @@ function stepDogs() {
   for (let i = 0; i < N; i++) {
     const d = Math.hypot(px[i] - Gx, py[i] - Gy, pz[i] - Gz);
     if (d > f) strag.push([d, i]);
-    if (Math.hypot(px[i] - pen.x, py[i] - pen.y, pz[i] - pen.z) < pen.r) penned++;
+    inPen[i] = Math.hypot(px[i] - pen.x, py[i] - pen.y, pz[i] - pen.z) < pen.r ? 1 : 0;
+    penned += inPen[i];
   }
   herd.penned = penned;
   strag.sort((a, b) => b[0] - a[0]);
@@ -903,10 +924,9 @@ function stepDogs() {
 }
 
 // ---------- drone show ----------
-// Most shapes are drawn on a hidden canvas and spread into one target point per boid. In 3D the drawing is
-// "inflated": depth comes from each pixel's distance to the edge and the local thickness of the shape, so
-// thin strokes become round tubes and broad areas become domes, with drones on the front, the back and a
-// rim around the silhouette. A few shapes are built directly in 3D (gen). anim(x, y, z, t) -> AX, AY, AZ.
+// Every shape has a 2D drawing, used in 2D (and extruded into a slab in 3D when it has no model). In 3D,
+// shapes with a model are built from 3D parts (see "3D models" below) and a few are generated point by
+// point (gen). anim(x, y, z, t) -> AX, AY, AZ bends the shape over time.
 let AX = 0, AY = 0, AZ = 0;
 const GA = Math.PI * (3 - Math.sqrt(5));   // golden angle, for even spirals
 function mulberry(seed) {
@@ -949,7 +969,7 @@ function gaussFrom(r) { return () => Math.sqrt(-2 * Math.log(r() + 1e-9)) * Math
 const FIREWORKS = [[190, 170, 110, '#ff4d6d'], [400, 125, 130, '#4dd2ff'], [600, 190, 100, '#ffd84d']];
 
 const SHAPES = [
-  { name: 'Chinese dragon', w: 1080, h: 380, depth: 1,
+  { name: 'Chinese dragon', w: 1080, h: 380,
     draw(c, w, h) {
       const cy = h / 2;
       const bw = x => 54 * (1 - 0.78 * Math.min(1, Math.max(0, (x - 250) / 760)));
@@ -976,23 +996,30 @@ const SHAPES = [
       c.fillStyle = '#e8f4ff'; ell(c, 34, cy - 60, 24, 24);           // the pearl it chases
     },
     anim(x, y, z, t) {
-      if (x < -470) { AX = x + 8 * Math.cos(t * 1.3); AY = y + 14 * Math.sin(t * 2); AZ = z + 10 * Math.sin(t * 1.1); return; }
+      if (x < -480) { AX = x + 8 * Math.cos(t * 1.3); AY = y + 14 * Math.sin(t * 2); AZ = z + 10 * Math.sin(t * 1.1); return; }
       const amp = 16 + 46 * Math.min(1, Math.max(0, (x + 300) / 500)), ph = x * 0.011 - t * 2.6;
       AX = x; AY = y + amp * Math.sin(ph); AZ = z + amp * 0.9 * Math.cos(ph);
     } },
-  { name: 'Maple leaf', w: 520, h: 560, depth: 0.3, back: 'same',
-    draw(c, w, h) {
+  { name: 'Canadian flag', w: 760, h: 440, sheet: true,
+    draw(c) {
+      // pole with a gold finial, then the flag (2:1): red bars, white square, red maple leaf
+      c.fillStyle = '#c8ccd4'; c.fillRect(20, 14, 10, 426); c.fillStyle = '#ffd23f'; ell(c, 25, 12, 9, 9);
+      c.fillStyle = '#ff2a2a'; c.fillRect(40, 20, 175, 350); c.fillRect(565, 20, 175, 350);
+      c.fillStyle = '#ffffff'; c.fillRect(215, 20, 350, 350);
       const R = [[0, 1], [0.08, 0.78], [0.2, 0.83], [0.15, 0.55], [0.42, 0.7], [0.4, 0.6], [0.62, 0.66], [0.52, 0.47], [0.6, 0.42], [0.3, 0.26], [0.36, 0.18], [0.05, 0.2]];
       const pts = [...R, ...R.slice(1).reverse().map(([x, y]) => [-x, y])];
-      const X = v => w / 2 + v * 400, Y = v => h - 70 - v * 440;
+      const X = v => 390 + v * 210, Y = v => 312 - v * 250;
       c.fillStyle = '#ff2a2a'; c.beginPath(); pts.forEach(([x, y]) => c.lineTo(X(x), Y(y))); c.closePath(); c.fill();
-      c.fillRect(X(-0.025), Y(0.22), 20, 0.3 * 440);
+      c.fillRect(X(-0.025), Y(0.22), 11, 0.3 * 250);
     },
     anim(x, y, z, t) {
-      // the leaf curls a little along its midrib as it turns
-      turn(x, y + 8 * Math.sin(t * 1.4), z + 0.0006 * x * x * Math.sin(t * 0.7), 0.6 * Math.sin(t * 0.5));
+      if (x < -342) { AX = x; AY = y; AZ = z; return; }       // the pole stays put
+      const u = (x + 340) / 700, ph = x * 0.016 - t * 3.2;      // u: 0 at the pole, 1 at the free end
+      AZ = z + 38 * u * Math.sin(ph) + 10 * u * Math.sin(y * 0.02 + t * 2.1);
+      AY = y + (is3D ? 6 : 14) * u * Math.cos(ph) + 10 * u * u; // ripple, and a slight droop at the end
+      AX = x - 5 * u * (1 - Math.cos(ph));                      // the cloth shortens as it ripples
     } },
-  { name: 'Face', w: 440, h: 540, depth: 0.55, back: '#9a5530',
+  { name: 'Face', w: 440, h: 540,
     draw(c) {
       c.fillStyle = '#9a5530'; ell(c, 220, 205, 180, 165);
       c.fillStyle = '#f4c7a1'; ell(c, 72, 295, 22, 38); ell(c, 368, 295, 22, 38); ell(c, 220, 295, 150, 195);
@@ -1010,10 +1037,9 @@ const SHAPES = [
       let yy = y;
       if (b > 0 && Math.abs(y + 18) < 24 && Math.abs(Math.abs(x) - 62) < 40) yy = -18 + (y + 18) * (1 - 0.92 * b);
       // the nose pokes forward on the front of the head
-      const nose = z < 0 ? -28 * Math.exp(-((x + 4) ** 2 + (y - 32) ** 2) / 900) : 0;
-      turn(x, yy, z + nose, 0.55 * Math.sin(t * 0.6));
+      turn(x, yy, z, 0.55 * Math.sin(t * 0.6));
     } },
-  { name: 'Butterfly', w: 640, h: 500, depth: 0.25, back: 'same',
+  { name: 'Butterfly', w: 640, h: 500,
     draw(c, w) {
       const half = () => {
         c.fillStyle = '#2f8cff'; ell(c, 205, 185, 125, 88, -0.5);
@@ -1030,10 +1056,10 @@ const SHAPES = [
     },
     anim(x, y, z, t) {
       // wings hinge on the body and beat; the whole butterfly drifts in a lazy loop and banks
-      const th = 1.15 * Math.pow(0.5 + 0.5 * Math.sin(t * 5), 1.5), ax = Math.abs(x);
+      const th = 1.0 * Math.pow(0.5 + 0.5 * Math.sin(t * 3), 1.5), ax = Math.abs(x);
       let X = x, Z = z;
       if (ax > 14) { const u = ax - 14; X = Math.sign(x) * (14 + u * Math.cos(th)); Z = z + u * Math.sin(th); }
-      turn(X, y + 10 * Math.sin(t * 5 + 1), Z, 0.5 * Math.sin(t * 0.4));
+      turn(X, y + 10 * Math.sin(t * 3 + 1), Z, 0.5 * Math.sin(t * 0.4));
       AX += 50 * Math.sin(t * 0.6);
     } },
   { name: 'Saturn', w: 560, h: 430,
@@ -1057,7 +1083,7 @@ const SHAPES = [
       spinTilt(x, y, z, t * 0.35, 0.42);
       const c = Math.cos(-0.25), s = Math.sin(-0.25), X = AX; AX = X * c - AY * s; AY = X * s + AY * c;
     } },
-  { name: 'Jack-o’-lantern', w: 520, h: 470, depth: 0.75, back: '#ff7a00',
+  { name: 'Jack-o’-lantern', w: 520, h: 470,
     draw(c) {
       c.fillStyle = '#ff7a00'; ell(c, 175, 265, 110, 165); ell(c, 345, 265, 110, 165); ell(c, 260, 265, 175, 170);
       c.strokeStyle = '#c85400'; c.lineWidth = 6;
@@ -1070,7 +1096,7 @@ const SHAPES = [
       c.quadraticCurveTo(260, 420, 150, 305); c.fill();
     },
     anim(x, y, z, t) { turn(x, y + 8 * Math.sin(t * 1.8), z, 0.6 * Math.sin(t * 0.45)); } },
-  { name: 'Diwali lamp', w: 520, h: 460, depth: 0.7, back: 'same',
+  { name: 'Diwali lamp', w: 520, h: 460,
     draw(c) {
       c.fillStyle = '#ff8c1a'; c.beginPath(); c.ellipse(260, 320, 190, 85, 0, 0, Math.PI); c.fill();
       c.beginPath(); c.moveTo(420, 300); c.lineTo(490, 290); c.lineTo(430, 335); c.fill();
@@ -1086,7 +1112,7 @@ const SHAPES = [
       if (y < 60) { const f = (60 - y) / 170; X = x + 7 * f * Math.sin(t * 8 + y * 0.05); Y = y + 3 * f * Math.sin(t * 11); }
       turn(X, Y, z, 0.5 * Math.sin(t * 0.4));
     } },
-  { name: 'Menorah', w: 640, h: 520, depth: 1, back: 'same',
+  { name: 'Menorah', w: 640, h: 520,
     draw(c) {
       c.strokeStyle = '#ffc23a'; c.lineWidth = 12;
       for (let k = 1; k <= 4; k++) { c.beginPath(); c.arc(320, 250, 62 * k, 0, Math.PI); c.stroke(); }
@@ -1129,7 +1155,7 @@ const SHAPES = [
       return b.done();
     },
     anim(x, y, z, t) { turn(x, y, z, t * 0.45); } },
-  { name: 'Snowflake', w: 500, h: 500, flat: true,
+  { name: 'Snowflake', w: 500, h: 500, extrude: 9, back: 'same',
     draw(c) {
       c.strokeStyle = '#cfe9ff'; c.translate(250, 250);
       for (let k = 0; k < 6; k++) {
@@ -1147,7 +1173,7 @@ const SHAPES = [
       const b = 0.7 * Math.sin(t * 0.35);
       AX = X; AY = Y * Math.cos(b) - z * Math.sin(b); AZ = Y * Math.sin(b) + z * Math.cos(b);
     } },
-  { name: 'Crescent and star', w: 560, h: 480, depth: 0.6,
+  { name: 'Crescent and star', w: 560, h: 480,
     draw(c) {
       c.fillStyle = '#ffd54a'; ell(c, 230, 240, 195, 195);
       hole(c, () => ell(c, 300, 200, 170, 170));
@@ -1179,7 +1205,7 @@ const SHAPES = [
       return b.done();
     },
     anim(x, y, z, t) { turn(x, y, z, t * 0.8); } },
-  { name: 'Beating heart', w: 500, h: 460, depth: 0.7,
+  { name: 'Beating heart', w: 500, h: 460,
     draw(c) {
       c.fillStyle = '#ff2d55'; c.beginPath();
       for (let k = 0; k <= 200; k++) {
@@ -1217,7 +1243,7 @@ const SHAPES = [
   { name: 'Fireworks 2027', w: 760, h: 560,
     gen(n) {
       const b = builder(n), nText = Math.round(n * 0.28);
-      const txt = sampleDrawn({ w: 760, h: 560, depth: 0.45, draw(c) { c.fillStyle = '#ffe9a8'; c.font = '900 150px system-ui, sans-serif'; c.textAlign = 'center'; c.fillText('2027', 380, 520); } }, nText, is3D);
+      const txt = sampleDrawn({ w: 760, h: 560, extrude: 16, draw(c) { c.fillStyle = '#ffe9a8'; c.font = '900 150px system-ui, sans-serif'; c.textAlign = 'center'; c.fillText('2027', 380, 520); } }, nText, is3D);
       for (let k = 0; k < nText; k++) b.add(txt.X[k], txt.Y[k], txt.Z[k], txt.palette[txt.C[k]]);
       // each burst is a sphere of rays (a 2D view sees them face-on)
       const per = Math.floor((n - nText) / 3), dirs = 34;
@@ -1262,7 +1288,7 @@ function textShape(str) {
   const fs = 170, m = document.createElement('canvas').getContext('2d');
   m.font = `900 ${fs}px system-ui, sans-serif`;
   const w = Math.ceil(Math.max(...lines.map(l => m.measureText(l).width))) + 40, h = Math.ceil(lines.length * fs * 1.05 + 40);
-  return { name: `Text: ${str.trim()}`, custom: 'text', w, h, depth: 0.45,
+  return { name: `Text: ${str.trim()}`, custom: 'text', w, h, extrude: 22,
     draw(c) {
       const gr = c.createLinearGradient(0, 0, w, 0);
       ['#ff4d6d', '#ffb02e', '#ffe14d', '#5be37d', '#4dd2ff', '#9b7bff'].forEach((col, k, a) => gr.addColorStop(k / (a.length - 1), col));
@@ -1280,24 +1306,269 @@ function imageShape(img, name) {
     anim(x, y, z, t) { turn(x, y, z, 0.45 * Math.sin(t * 0.5)); } };
 }
 
-// distance (in pixels) from each filled pixel to the nearest empty one: two-pass 3-4 chamfer
-function chamfer(mask, w, h) {
-  const d = new Float32Array(w * h), INF = 1e9;
-  for (let k = 0; k < w * h; k++) d[k] = mask[k] ? INF : 0;
-  const at = (x, y) => (x < 0 || y < 0 || x >= w || y >= h) ? 0 : d[y * w + x];
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const k = y * w + x; if (!d[k]) continue;
-    d[k] = Math.min(d[k], at(x - 1, y) + 3, at(x, y - 1) + 3, at(x - 1, y - 1) + 4, at(x + 1, y - 1) + 4);
+// ---------- 3D models for the drone show ----------
+// A model is a list of parts, each a signed distance function (negative inside) with a colour, combined
+// in order by union ('u'), smooth union ('s', blend radius k) or subtraction ('x', carving). Drones are
+// spread evenly over the zero surface: find surface cells on a coarse grid, drop candidate points in them,
+// pull each onto the surface with Newton steps, then thin with a Poisson-disc pass to exactly n.
+// Coordinates match the shape's 2D drawing (x right, y down, origin at the centre); the front faces -z.
+function sdEll(x, y, z, rx, ry, rz) {
+  const X = x / rx, Y = y / ry, Z = z / rz, k0 = Math.hypot(X, Y, Z), k1 = Math.hypot(X / rx, Y / ry, Z / rz);
+  return k1 < 1e-9 ? -Math.min(rx, ry, rz) : k0 * (k0 - 1) / k1;
+}
+// tube from a to b whose radius tapers from ra to rb
+function sdTube(x, y, z, a, b, ra, rb) {
+  const bx = b[0] - a[0], by = b[1] - a[1], bz = b[2] - a[2], qx = x - a[0], qy = y - a[1], qz = z - a[2];
+  const t = clamp((qx * bx + qy * by + qz * bz) / (bx * bx + by * by + bz * bz || 1), 0, 1);
+  return Math.hypot(qx - bx * t, qy - by * t, qz - bz * t) - (ra + (rb - ra) * t);
+}
+// signed distance to a 2D polygon (Inigo Quilez)
+function sdPoly(px, py, v) {
+  let d = (px - v[0][0]) ** 2 + (py - v[0][1]) ** 2, s = 1;
+  for (let i = 0, j = v.length - 1; i < v.length; j = i, i++) {
+    const ex = v[j][0] - v[i][0], ey = v[j][1] - v[i][1], wx = px - v[i][0], wy = py - v[i][1];
+    const t = clamp((wx * ex + wy * ey) / (ex * ex + ey * ey), 0, 1), bx = wx - ex * t, by = wy - ey * t;
+    d = Math.min(d, bx * bx + by * by);
+    const c1 = py >= v[i][1], c2 = py < v[j][1], c3 = ex * wy > ey * wx;
+    if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) s = -s;
   }
-  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
-    const k = y * w + x; if (!d[k]) continue;
-    d[k] = Math.min(d[k], at(x + 1, y) + 3, at(x, y + 1) + 3, at(x + 1, y + 1) + 4, at(x - 1, y + 1) + 4);
+  return s * Math.sqrt(d);
+}
+// a 2D polygon extruded to half-thickness t around z = zc, edges rounded by r
+function sdPrism(x, y, z, v, zc, t, r = 0) {
+  const d2 = sdPoly(x, y, v) + r, dz = Math.abs(z - zc) - t + r;
+  return Math.min(Math.max(d2, dz), 0) + Math.hypot(Math.max(d2, 0), Math.max(dz, 0)) - r;
+}
+function starPoly(cx, cy, R, r, n = 5) { const v = []; for (let k = 0; k < n * 2; k++) { const a = -Math.PI / 2 + k * Math.PI / n, q = k % 2 ? r : R; v.push([cx + q * Math.cos(a), cy + q * Math.sin(a)]); } return v; }
+
+// part constructors; b = bounding sphere [x, y, z, radius] so distant parts can be skipped cheaply
+const ellPart = (c, r, col, op = 'u', k = 0) => ({ f: (x, y, z) => sdEll(x - c[0], y - c[1], z - c[2], r[0], r[1], r[2]), col, op, k, b: [c[0], c[1], c[2], Math.max(...r)] });
+const ballPart = (c, r, col, op = 'u', k = 0) => ({ f: (x, y, z) => Math.hypot(x - c[0], y - c[1], z - c[2]) - r, col, op, k, b: [c[0], c[1], c[2], r] });
+const tubePart = (a, b, ra, rb, col, op = 'u', k = 0) => ({ f: (x, y, z) => sdTube(x, y, z, a, b, ra, rb), col, op, k,
+  b: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2, Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) / 2 + Math.max(ra, rb)] });
+// a chain of tubes through points, radius tapering from r0 to r1
+function chain(pts, r0, r1, col, op = 'u', k = 0) {
+  const out = [];
+  for (let i = 0; i + 1 < pts.length; i++) out.push(tubePart(pts[i], pts[i + 1], r0 + (r1 - r0) * i / (pts.length - 1), r0 + (r1 - r0) * (i + 1) / (pts.length - 1), col, op, k));
+  return out;
+}
+const mirrorZ = p => [p[0], p[1], -p[2]];
+
+let HIT = null;
+function evalModel(parts, x, y, z) {
+  let d = 1e9, hit = null;
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p.b && p.op !== 'x') {
+      const bd = Math.hypot(x - p.b[0], y - p.b[1], z - p.b[2]) - p.b[3];
+      if (bd - (p.k || 0) > d) continue;           // can't affect the result
+    }
+    const di = p.f(x, y, z);
+    if (p.op === 'u') { if (di < d) { d = di; hit = p; } }
+    else if (p.op === 's') { const h = clamp(0.5 + 0.5 * (d - di) / p.k, 0, 1); if (h > 0.5 || !hit) hit = p; d = d + (di - d) * h - p.k * h * (1 - h); }
+    else if (p.op === 'x') { if (-di > d) { d = -di; hit = p; } }
   }
-  for (let k = 0; k < w * h; k++) d[k] /= 3;
+  HIT = hit;
   return d;
 }
 
-function sampleShape(shape, n) { return shape.gen ? shape.gen(n) : sampleDrawn(shape, n, is3D && !shape.flat); }
+function sampleModel(shape, n) {
+  shape._cache = shape._cache || new Map();
+  if (shape._cache.has(n)) return shape._cache.get(n);
+  const parts = shape._parts || (shape._parts = shape.model());
+  const F = (x, y, z) => evalModel(parts, x, y, z);
+  const hx = shape.w / 2 + 12, hy = shape.h / 2 + 12, hz = shape.d / 2 + 12;
+  const c = Math.max(hx, hy, hz) * 2 / 72;
+  const nx = Math.ceil(2 * hx / c), ny = Math.ceil(2 * hy / c), nz = Math.ceil(2 * hz / c);
+  const g = new Float32Array((nx + 1) * (ny + 1) * (nz + 1)), gi = (i, j, k) => (k * (ny + 1) + j) * (nx + 1) + i;
+  for (let k = 0; k <= nz; k++) for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) g[gi(i, j, k)] = F(-hx + i * c, -hy + j * c, -hz + k * c);
+  const cells = [];
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    let neg = false, pos = false;
+    for (let q = 0; q < 8; q++) { if (g[gi(i + (q & 1), j + ((q >> 1) & 1), k + (q >> 2))] < 0) neg = true; else pos = true; }
+    if (neg && pos) cells.push(i, j, k);
+  }
+  if (!cells.length) return sampleDrawn(shape, n, false);
+  const r = mulberry(17), ncell = cells.length / 3, per = Math.max(1, Math.ceil(n * 7 / ncell)), cand = [];
+  const e = c * 0.05;
+  for (let q = 0; q < cells.length; q += 3) for (let m = 0; m < per; m++) {
+    let x = -hx + (cells[q] + r()) * c, y = -hy + (cells[q + 1] + r()) * c, z = -hz + (cells[q + 2] + r()) * c, d = F(x, y, z);
+    for (let it = 0; it < 6 && Math.abs(d) > 0.05; it++) {   // Newton steps onto the surface
+      const gx = (F(x + e, y, z) - F(x - e, y, z)) / (2 * e), gy = (F(x, y + e, z) - F(x, y - e, z)) / (2 * e), gz = (F(x, y, z + e) - F(x, y, z - e)) / (2 * e);
+      const g2 = gx * gx + gy * gy + gz * gz; if (g2 < 1e-8) break;
+      x -= d * gx / g2; y -= d * gy / g2; z -= d * gz / g2; d = F(x, y, z);
+    }
+    if (Math.abs(d) < 0.6) cand.push(x, y, z);
+  }
+  // Poisson-disc thinning: the widest spacing that still leaves at least n points
+  const mc = cand.length / 3, ord = Array.from({ length: mc }, (_, k) => k);
+  for (let k = mc - 1; k > 0; k--) { const j = (r() * (k + 1)) | 0; const t = ord[k]; ord[k] = ord[j]; ord[j] = t; }
+  const thin = (rad, out) => {
+    const cell = new Map(), r2 = rad * rad; let cnt = 0;
+    for (const q of ord) {
+      const x = cand[3 * q], y = cand[3 * q + 1], z = cand[3 * q + 2], cx = Math.floor(x / rad), cy = Math.floor(y / rad), cz = Math.floor(z / rad);
+      let ok = true;
+      for (let a = -1; a <= 1 && ok; a++) for (let b = -1; b <= 1 && ok; b++) for (let d = -1; d <= 1 && ok; d++) {
+        const l = cell.get(((cx + a) * 4096 + cy + b) * 4096 + cz + d); if (!l) continue;
+        for (let m = 0; m < l.length; m += 3) if ((l[m] - x) ** 2 + (l[m + 1] - y) ** 2 + (l[m + 2] - z) ** 2 < r2) { ok = false; break; }
+      }
+      if (!ok) continue;
+      const key = (cx * 4096 + cy) * 4096 + cz; if (!cell.has(key)) cell.set(key, []); cell.get(key).push(x, y, z);
+      cnt++; if (out) out.push(x, y, z);
+    }
+    return cnt;
+  };
+  let lo = 0.1, hi = c * 3;
+  for (let it = 0; it < 18; it++) { const mid = (lo + hi) / 2; if (thin(mid) >= n) lo = mid; else hi = mid; }
+  const pts = []; thin(lo, pts);
+  const m = pts.length / 3, idx = Array.from({ length: m }, (_, k) => k);
+  for (let k = m - 1; k > 0; k--) { const j = (r() * (k + 1)) | 0; const t = idx[k]; idx[k] = idx[j]; idx[j] = t; }
+  const b = builder(n);
+  for (let k = 0; k < Math.min(n, m); k++) {
+    const q = idx[k], x = pts[3 * q], y = pts[3 * q + 1], z = pts[3 * q + 2];
+    F(x, y, z);
+    b.add(x, y, z, HIT ? (typeof HIT.col === 'function' ? HIT.col(x, y, z) : HIT.col) : '#ffffff');
+  }
+  const out = b.done();
+  shape._cache.set(n, out);
+  return out;
+}
+
+const MODELS = {
+  'Chinese dragon'() {
+    const red = '#e8302a', gold = '#ffc23a', orange = '#ff8c1a', P = [];
+    const rAt = x => 27 * (1 - 0.78 * clamp((x + 290) / 760, 0, 1));
+    const body = (x, y) => y > 0.45 * rAt(x) ? gold : red;                 // gold belly scales
+    for (let k = 0; k < 20; k++) { const x0 = -300 + k * 40, x1 = x0 + 40; P.push(tubePart([x0, 0, 0], [x1, 0, 0], rAt(x0), rAt(x1), body)); }
+    for (let x = -270; x <= 450; x += 36) { const r = rAt(x); P.push(tubePart([x, -r + 3, 0], [x + 8, -r - 20 * r / 27, 0], 3 + 4 * r / 27, 1, gold)); }
+    P.push(tubePart([490, 0, 0], [545, -45, 0], 6, 2, orange), tubePart([490, 0, 0], [548, 40, 0], 6, 2, orange), tubePart([490, 0, 0], [542, 0, 0], 5, 2, orange));
+    for (const lx of [-170, 200]) for (const sd of [1, -1]) {
+      const r = rAt(lx), hip = [lx, r * 0.3, sd * r * 0.55], knee = [lx + 18, r + 10, sd * (r * 0.6 + 14)], foot = [lx + 8, r + 30, sd * (r * 0.6 + 16)];
+      P.push(tubePart(hip, knee, 9, 7, red), tubePart(knee, foot, 7, 5, red));
+      for (const t of [-1, 0, 1]) P.push(tubePart(foot, [foot[0] - 9, foot[1] + 6, foot[2] + t * 7], 3, 1.5, gold));
+    }
+    // head: skull, snout and jaw blended together, eyes, brow ridges, horns, whiskers, mane, and the pearl
+    P.push(ellPart([-340, -6, 0], [70, 44, 40], red, 's', 10), ellPart([-405, 4, 0], [54, 24, 30], red, 's', 14),
+      ellPart([-392, 30, 0], [48, 11, 24], gold, 's', 6));
+    for (const sd of [1, -1]) {
+      P.push(ballPart([-356, -22, sd * 31], 11, (x, y, z) => x < -362 ? '#3fbf60' : '#ffffff'));
+      P.push(tubePart([-378, -36, sd * 24], [-334, -46, sd * 32], 6, 5, gold, 's', 4));
+      P.push(tubePart([-320, -40, sd * 20], [-250, -122, sd * 46], 9, 3, gold), tubePart([-345, -44, sd * 14], [-302, -128, sd * 24], 7, 2, gold));
+      P.push(...chain([[-447, 12, sd * 18], [-466, 40, sd * 34], [-472, 74, sd * 46], [-462, 104, sd * 52]], 3.5, 2, gold));
+      P.push(...chain([[-432, -6, sd * 20], [-458, -40, sd * 40], [-470, -78, sd * 52]], 3, 2, gold));
+    }
+    for (let k = 0; k < 11; k++) {
+      const a = -1.9 + k * 0.38, dy = -Math.cos(a), dz = Math.sin(a);
+      P.push(tubePart([-292, 24 * dy, 24 * dz], [-232, 66 * dy, 66 * dz], 9, 2, orange));
+    }
+    P.push(ballPart([-506, -60, 0], 24, '#e8f4ff'));
+    return P;
+  },
+  'Face'() {
+    const skin = '#ffb27a', hair = '#7a3a14', P = [];
+    const skinCol = (x, y, z) => {
+      if (z < 0 && Math.abs(Math.hypot(x, y - 80) - 62) < 10 && y - 80 > 62 * 0.5) return '#ff2848';      // smile
+      if (z < -60 && (Math.hypot(x - 78, y - 65) < 24 || Math.hypot(x + 78, y - 65) < 24)) return '#f59a9a';  // cheeks
+      return skin;
+    };
+    P.push(ellPart([0, 25, 0], [150, 195, 165], skinCol));
+    P.push(ellPart([0, 115, -30], [105, 85, 120], skinCol, 's', 30));                                   // chin and jaw
+    P.push(tubePart([0, 170, 25], [0, 265, 35], 62, 62, skin, 's', 30));                               // neck
+    for (const sd of [1, -1]) P.push(ellPart([sd * 150, 25, 10], [18, 38, 24], skin, 's', 10));      // ears
+    P.push(tubePart([0, -5, -152], [0, 55, -176], 11, 17, '#ecb48c', 's', 12));                        // nose
+    for (const sd of [1, -1]) {
+      P.push(ballPart([sd * 62, -18, -130], 24, (x, y, z) => { const dz = (z + 130) / 24; return dz < -0.92 ? '#0a1a40' : dz < -0.6 ? '#2f8cff' : '#ffffff'; }));
+      P.push(tubePart([sd * 26, -62, -154], [sd * 100, -52, -114], 8, 6, hair));                       // brows
+    }
+    // hair: a cap over the top and back of the head, cut away above the forehead
+    P.push({ f: (x, y, z) => Math.max(sdEll(x, y + 30, z - 35, 172, 195, 172), Math.min(-55 - z, y + 108)), col: hair, op: 's', k: 8, b: [0, -30, 35, 195] });
+    return P;
+  },
+  'Jack-o’-lantern'() {
+    const P = [];
+    // ribbed pumpkin: an ellipsoid whose surface is ridged by cos(8 * angle round the stem)
+    P.push({ f: (x, y, z) => { const a = Math.atan2(z, x); return sdEll(x, y - 30, z, 190, 155, 175) - 7 * Math.cos(8 * a) * Math.min(1, Math.hypot(x, z) / 120); },
+      col: (x, y, z) => Math.cos(8 * Math.atan2(z, x)) < -0.75 ? '#c85400' : '#ff7a00', op: 'u', b: [0, 30, 0, 200] });
+    P.push(tubePart([0, -112, 0], [10, -178, 0], 16, 11, '#3da33d', 's', 10));
+    // the carved face: prisms cut into the front; their walls glow yellow
+    const glow = '#ffd84a', front = (v) => ({ f: (x, y, z) => Math.max(sdPoly(x, y, v), z + 60), col: glow, op: 'x' });
+    P.push(front([[-90, -10], [-30, -10], [-60, -70]]), front([[30, -10], [90, -10], [60, -70]]), front([[-15, 40], [15, 40], [0, 13]]));
+    P.push(front([[-110, 70], [-75, 90], [-60, 70], [-40, 95], [-20, 75], [0, 97], [20, 75], [40, 95], [60, 70], [75, 90], [110, 70], [80, 120], [40, 138], [0, 145], [-40, 138], [-80, 120]]));
+    return P;
+  },
+  'Beating heart'() {
+    const P = [], red = '#ff2d55';
+    const col = (x, y, z) => (x < -40 && y < -50 && z < -40) ? '#ff8fa6' : red;
+    P.push(ellPart([-62, -55, 0], [100, 95, 75], col), ellPart([62, -55, 0], [100, 95, 75], col, 's', 30));
+    P.push(tubePart([0, -20, 0], [0, 172, 0], 78, 6, col, 's', 40));
+    P.push(tubePart([-215, 188, -30], [205, -136, 40], 4.5, 4.5, '#ffd23f'), tubePart([205, -136, 40], [236, -160, 45], 13, 1, '#ffd23f'));
+    for (const t of [-1, 1]) P.push(tubePart([-215, 188, -30], [-232, 172, -30 + t * 14], 3, 1, '#ffd23f'), tubePart([-200, 176, -27], [-217, 160, -27 + t * 14], 3, 1, '#ffd23f'));
+    return P;
+  },
+  'Butterfly'() {
+    const P = [];
+    // wings are thin ellipsoid slabs, mirrored left/right (|x|) and tilted like the drawing
+    const wing = (cx, cy, rx, ry, rot, outer, inner, ir, spots) => ({
+      f: (x, y, z) => { const dx = Math.abs(x) - cx, dy = y - cy, c = Math.cos(rot), s = Math.sin(rot); return sdEll(dx * c + dy * s, -dx * s + dy * c, z, rx, ry, 4); },
+      col: (x, y, z) => {
+        const dx = Math.abs(x) - cx, dy = y - cy, c = Math.cos(rot), s = Math.sin(rot), lx = dx * c + dy * s, ly = -dx * s + dy * c;
+        if (spots && spots.some(([sx, sy, sr]) => Math.hypot(Math.abs(x) - sx, y - sy) < sr)) return '#ffffff';
+        return (lx / ir[0]) ** 2 + (ly / ir[1]) ** 2 < 1 ? inner : outer;
+      }, op: 'u', b: [0, cy, 0, cx + rx] });
+    P.push(wing(115, -65, 125, 88, 0.5, '#2f8cff', '#8fdcff', [62, 40], [[205, -130, 12], [170, -158, 9], [225, -85, 8]]));
+    P.push(wing(88, 88, 88, 76, -0.4, '#ff8a1f', '#ffd23f', [40, 34]));
+    P.push(tubePart([0, -95, 0], [0, 95, 0], 7, 5, '#eeeeee'), ballPart([0, -106, 0], 11, '#eeeeee'));
+    for (const sd of [1, -1]) { P.push(...chain([[sd * 6, -118, 0], [sd * 30, -160, -4], [sd * 50, -180, -8]], 2.5, 2, '#eeeeee')); P.push(ballPart([sd * 50, -180, -8], 6, '#eeeeee')); }
+    return P;
+  },
+  'Menorah'() {
+    const gold = '#ffc23a', P = [];
+    // arms: lower half-circles round the centre stem, as tubes
+    for (let k = 1; k <= 4; k++) {
+      const R = 62 * k;
+      P.push({ f: (x, y, z) => y >= -10 ? Math.hypot(Math.hypot(x, y + 10) - R, z) - 6 : Math.min(Math.hypot(x - R, y + 10, z), Math.hypot(x + R, y + 10, z)) - 6, col: gold, op: 'u', b: [0, -10, 0, R + 6] });
+    }
+    P.push(tubePart([0, -10, 0], [0, 212, 0], 10, 12, gold));
+    P.push({ f: (x, y, z) => { const qx = Math.abs(x) - 86, qy = Math.abs(y - 223) - 9, qz = Math.abs(z) - 36; return Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qy, qz), 0) - 4; }, col: gold, op: 'u', b: [0, 223, 0, 100] });
+    for (let k = -4; k <= 4; k++) {
+      const x = 62 * k, top = k === 0 ? -120 : -80;
+      P.push(ellPart([x, -12, 0], [14, 5, 14], gold));
+      P.push(tubePart([x, -14, 0], [x, top, 0], 8, 8, k === 0 ? '#ffffff' : '#6fa8ff'));
+      P.push(ellPart([x, top - 22, 0], [9, 18, 9], (px, py) => py > top - 24 && Math.abs(px - x) < 5 ? '#fff2a8' : '#ffb02e'));
+    }
+    return P;
+  },
+  'Diwali lamp'() {
+    const P = [], cols = ['#ff3b6b', '#ffd23f', '#3fd0ff', '#7be08a'];
+    const bowlCol = (x, y, z) => {
+      if (y < 80) return '#ffb347';                                                      // oil surface
+      const a = Math.atan2(z, x); if (y > 106 && y < 128 && Math.cos(18 * a) > 0.75) return '#ff3b6b';   // painted dots
+      return '#ff8c1a';
+    };
+    P.push({ f: (x, y, z) => Math.max(sdEll(x, y - 90, z, 190, 85, 150), 78 - y), col: bowlCol, op: 'u', b: [0, 90, 0, 190] });
+    P.push(tubePart([150, 75, 0], [235, 58, 0], 30, 8, '#ff8c1a', 's', 14));
+    const flameCol = (x, y) => Math.abs(x) < 11 && y > -40 ? '#fff3b0' : '#ffb02e';
+    P.push(tubePart([0, 62, 0], [0, -110, 0], 24, 2, flameCol), ballPart([0, 50, 0], 25, flameCol, 's', 12));
+    for (let k = 0; k < 20; k++) { const a = k / 20 * Math.PI * 2; P.push(ballPart([235 * Math.cos(a), 205, 235 * Math.sin(a)], 8, cols[k % 4])); }
+    return P;
+  },
+  'Crescent and star'() {
+    return [
+      ballPart([-50, 0, 0], 195, '#ffd54a'),
+      { f: (x, y, z) => Math.hypot(x - 20, y + 40, z + 10) - 170, col: '#ffd54a', op: 'x' },        // the bite that makes the crescent
+      { f: (x, y, z) => sdPrism(x, y, z, starPoly(140, -25, 72, 29), 0, 13, 3), col: '#fff0a0', op: 'u', b: [140, -25, 0, 80] },
+    ];
+  },
+};
+// depth of each model's bounding box (its width and height come from the shape)
+const MODEL_DEPTH = { 'Chinese dragon': 160, 'Face': 420, 'Jack-o’-lantern': 400, 'Beating heart': 200, 'Butterfly': 80, 'Menorah': 90, 'Diwali lamp': 500, 'Crescent and star': 420 };
+for (const sh of SHAPES) if (MODELS[sh.name]) { sh.model = MODELS[sh.name]; sh.d = MODEL_DEPTH[sh.name]; }
+
+function sampleShape(shape, n) {
+  if (shape.gen) return shape.gen(n);
+  if (is3D && shape.model) return sampleModel(shape, n);   // a real 3D model
+  return sampleDrawn(shape, n, is3D);                       // flat drawing (extruded into a slab in 3D)
+}
 
 // spread a drawn shape into n target points (shape-centred coordinates) with LED colours
 function sampleDrawn(shape, n, inflate) {
@@ -1330,7 +1601,7 @@ function sampleDrawn(shape, n, inflate) {
     }
     const relief = inflate ? Math.max(w, h) * 0.12 : 0;
     for (let q = 0; q < cand.length; q += 5) if (cand[q + 3] < hi * cand[q + 2]) pts.push(cand[q], cand[q + 1], (0.5 - cand[q + 4]) * relief);
-  } else if (!inflate) {
+  } else if (!inflate || shape.sheet) {
     // bisect the hex-grid spacing for the widest grid that still gives ≥ n points, so few are dropped
     const s0 = Math.sqrt(filled / Math.max(1, n) / 0.866);
     let lo = s0 * 0.5, hi = s0 * 1.5;
@@ -1338,14 +1609,16 @@ function sampleDrawn(shape, n, inflate) {
     const g = hexGrid(lo, filledAt);
     for (let q = 0; q < g.length; q += 2) pts.push(g[q], g[q + 1], 0);
   } else {
-    const mask = new Uint8Array(w * h);
-    for (let k = 0; k < w * h; k++) mask[k] = data[k * 4 + 3] > 128 ? 1 : 0;
-    const dist = chamfer(mask, w, h);
-    // rim: edge pixels thinned to roughly the grid spacing, so the silhouette reads from the side
+    // extruded slab: front face, a sparser back face, and side walls stacked up from the outline
+    const t = shape.extrude || 12;
     const rr = mulberry(3), band = [];
-    for (let k = 0; k < w * h; k++) if (mask[k] && dist[k] <= 1.01) band.push(k);
-    for (let k = band.length - 1; k > 0; k--) { const j = (rr() * (k + 1)) | 0; const t = band[k]; band[k] = band[j]; band[j] = t; }
-    const rim = s => {
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const k = y * w + x; if (data[k * 4 + 3] <= 128) continue;
+      const empty = (xx, yy) => xx < 0 || yy < 0 || xx >= w || yy >= h || data[(yy * w + xx) * 4 + 3] <= 128;
+      if (empty(x - 1, y) || empty(x + 1, y) || empty(x, y - 1) || empty(x, y + 1)) band.push(k);
+    }
+    for (let k = band.length - 1; k > 0; k--) { const j = (rr() * (k + 1)) | 0; const q = band[k]; band[k] = band[j]; band[j] = q; }
+    const rim = s => {   // outline pixels thinned to about the grid spacing
       const cell = new Map(), out = [], s2 = s * s;
       for (const k of band) {
         const x = k % w, y = (k / w) | 0, cx = Math.floor(x / s), cy = Math.floor(y / s);
@@ -1359,29 +1632,14 @@ function sampleDrawn(shape, n, inflate) {
       }
       return out;
     };
-    // front + back + rim = n
-    // front + every other point on the back (a sparser back keeps the front's details legible) + rim
-    const count = s => { const n2 = hexGrid(s, filledAt).length / 2; return n2 + Math.ceil(n2 / 2) + rim(s * 0.9).length / 2; };
+    const layers = s => Math.max(2, Math.round(2 * t / s) + 1);
+    const count = s => { const n2 = hexGrid(s, filledAt).length / 2; return n2 + Math.ceil(n2 / 2) + rim(s).length / 2 * layers(s); };
     const s0 = Math.sqrt(1.5 * filled / Math.max(1, n) / 0.866);
-    let lo = s0 * 0.5, hi = s0 * 2.5;
+    let lo = s0 * 0.3, hi = s0 * 2.5;
     for (let it = 0; it < 20; it++) { const mid = (lo + hi) / 2; if (count(mid) >= n) lo = mid; else hi = mid; }
-    const g = hexGrid(lo, filledAt), rm = rim(lo * 0.9);
-    // local thickness: the largest inscribed circle covering each point (circle centres = ridge pixels)
-    const ridges = [];
-    for (let y = 2; y < h - 2; y += 2) for (let x = 2; x < w - 2; x += 2) {
-      const d = dist[y * w + x]; if (d < 2) continue;
-      let top = true;
-      for (let a = -1; a <= 1 && top; a++) for (let b = -1; b <= 1; b++) if ((a || b) && dist[(y + b * 2) * w + x + a * 2] > d) { top = false; break; }
-      if (top) ridges.push(x, y, d);
-    }
-    const depth = shape.depth ?? 0.7;
-    const height = (x, y) => {
-      const d = dist[(y | 0) * w + (x | 0)]; let r = d;
-      for (let q = 0; q < ridges.length; q += 3) { const rd = ridges[q + 2]; if (rd > r && (x - ridges[q]) ** 2 + (y - ridges[q + 1]) ** 2 < rd * rd) r = rd; }
-      return depth * Math.sqrt(Math.max(0, d * (2 * r - d)));    // circular cross-section of radius r
-    };
-    for (let q = 0; q < g.length; q += 2) { const z = height(g[q], g[q + 1]); pts.push(g[q], g[q + 1], -z); back.push(0); if ((q / 2) % 2 === 0) { pts.push(g[q], g[q + 1], z); back.push(1); } }   // the camera looks along +z, so the front is at -z
-    for (let q = 0; q < rm.length; q += 2) { pts.push(rm[q], rm[q + 1], 0); back.push(0); }
+    const g = hexGrid(lo, filledAt), rm = rim(lo), L = layers(lo);
+    for (let q = 0; q < g.length; q += 2) { pts.push(g[q], g[q + 1], -t); back.push(0); if ((q / 2) % 2 === 0) { pts.push(g[q], g[q + 1], t); back.push(1); } }
+    for (let q = 0; q < rm.length; q += 2) for (let l = 0; l < L; l++) { pts.push(rm[q], rm[q + 1], -t + 2 * t * l / (L - 1)); back.push(0); }
   }
   const m = pts.length / 3, rr = mulberry(5), idx = Array.from({ length: m }, (_, k) => k);
   for (let k = m - 1; k > 0; k--) { const j = (rr() * (k + 1)) | 0; const t = idx[k]; idx[k] = idx[j]; idx[j] = t; }
@@ -1412,8 +1670,7 @@ const show = { on: false, idx: 0, t: 0, list: SHAPES.slice(), cur: SHAPES[0], pa
 function showFrame() {   // [centre x, y, z, world units per shape pixel]
   const sh = show.cur;
   if (is3D) return [WX / 2, WY / 2, WZ / 2, Math.min(WX * 1.7 / sh.w, WY * 1.6 / sh.h)];   // shows may extend past the box
-  const availW = (!panel.classList.contains('hidden') && W > 760) ? W - 306 : W;
-  return [availW / 2, H / 2, 0, Math.min(availW * 0.86 / sh.w, H * 0.8 / sh.h)];
+  return [W / 2, H / 2, 0, Math.min(W * 0.86 / sh.w, H * 0.8 / sh.h)];
 }
 function shapeTarget(bx, by, bz, t) { if (show.cur.anim) show.cur.anim(bx, by, bz, t); else { AX = bx; AY = by; AZ = bz; } }
 function updateShowTargets() {
@@ -1454,9 +1711,15 @@ function startShow(idx) {
   show.on = true;
   assignShow();
   refreshShowUI();
+  warmNext();
 }
 function stopShow() { show.on = false; refreshShowUI(); }
-function nextShape() { show.idx = (show.idx + 1) % show.list.length; show.cur = show.list[show.idx]; assignShow(); refreshShowUI(); }
+// build the next shape's model while the current one is on show, so switching doesn't stall
+function warmNext() {
+  const nxt = show.list[(show.idx + 1) % show.list.length], n = N;
+  if (nxt && nxt.model) setTimeout(() => { if (show.on && is3D && N === n) sampleModel(nxt, n); }, 1500);
+}
+function nextShape() { show.idx = (show.idx + 1) % show.list.length; show.cur = show.list[show.idx]; assignShow(); refreshShowUI(); warmNext(); }
 function advanceShow() { show.t += 1 / 60; if ($('showAuto').checked && show.t > P.hold) nextShape(); }
 
 function drawShow() {
@@ -1972,7 +2235,15 @@ pauseBtn.onclick = togglePause;
 $('stepbtn').onclick = () => { if (!paused) togglePause(); stepOnce = true; };
 $('reset').onclick = scatter;
 $('clearObs').onclick = () => { obstacles.length = 0; };
-$('toggle').onclick = () => panel.classList.remove('hidden');
+function setPanel(visible) {
+  panel.classList.toggle('hidden', !visible);
+  document.body.classList.toggle('nopanel', !visible);
+  resize();
+  // keep the sheepdogs' pen inside a view that just changed size
+  if (hunterMode === 'dogs' && !is3D) { const p = herd.pen; p.x = clamp(p.x, p.r + 20, WX - p.r - 20); p.y = clamp(p.y, p.r + 20, WY - p.r - 20); }
+}
+$('toggle').onclick = () => setPanel(true);
+$('hidePanel').onclick = () => setPanel(false);
 
 window.addEventListener('keydown', e => {
   if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
@@ -1981,7 +2252,7 @@ window.addEventListener('keydown', e => {
   else if (e.key === 's' || e.key === 'S') { if (!paused) togglePause(); stepOnce = true; }
   else if (e.key === 'r' || e.key === 'R') scatter();
   else if (e.key === 'd' || e.key === 'D') setDim(is3D ? '2d' : '3d');
-  else if (e.key === 'h' || e.key === 'H') panel.classList.toggle('hidden');
+  else if (e.key === 'h' || e.key === 'H') setPanel(panel.classList.contains('hidden'));
   else if (e.key === 'v' || e.key === 'V') toggleRecording();
 });
 
