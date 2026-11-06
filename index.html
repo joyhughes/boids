@@ -8,15 +8,16 @@
   :root { --bg:#0b0d12; --panel:rgba(18,21,29,.92); --line:#2a2f3c; --text:#d8dce6; --dim:#8a91a3; --accent:#7cc4ff; }
   * { box-sizing:border-box; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.35 system-ui,-apple-system,Segoe UI,sans-serif; overflow:hidden; }
-  canvas { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; }
-  #panel { position:fixed; top:12px; right:12px; width:270px; max-height:calc(100% - 24px); overflow:auto;
+  canvas#c { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; }
+  #panel { position:fixed; top:12px; right:12px; width:280px; max-height:calc(100% - 24px); overflow:auto;
     background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px 14px; backdrop-filter:blur(6px); }
   #panel.hidden { display:none; }
   h1 { font-size:15px; margin:0 0 2px; font-weight:600; letter-spacing:.2px; }
   .sub { color:var(--dim); font-size:11.5px; margin-bottom:10px; }
   h2 { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--dim); margin:14px 0 6px; font-weight:600; }
-  .row { display:grid; grid-template-columns:96px 1fr 40px; align-items:center; gap:6px; margin:3px 0; }
-  .row label { color:var(--text); white-space:nowrap; }
+  h3 { font-size:11.5px; font-weight:600; margin:10px 0 2px; color:var(--text); }
+  .row { display:grid; grid-template-columns:104px 1fr 40px; align-items:center; gap:6px; margin:3px 0; }
+  .row label { color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row output { text-align:right; color:var(--dim); font-variant-numeric:tabular-nums; }
   input[type=range] { width:100%; accent-color:var(--accent); }
   .seg { display:flex; gap:4px; flex-wrap:wrap; }
@@ -25,11 +26,27 @@
   button.on { background:#24405a; border-color:var(--accent); color:#fff; }
   .seg button { flex:1 1 auto; }
   #dims button { font-weight:600; padding:6px 8px; }
-  .chk { display:flex; align-items:center; gap:6px; margin:4px 0; }
-  .help { color:var(--dim); font-size:11.5px; margin-top:8px; }
+  .chk { display:flex; align-items:flex-start; gap:6px; margin:4px 0; }
+  .chk input { margin-top:2px; }
+  .help { color:var(--dim); font-size:11.5px; margin-top:6px; }
+  .stats { color:var(--text); font-size:11.5px; margin-top:6px; font-variant-numeric:tabular-nums; line-height:1.5; }
+  .stats .k { color:var(--dim); }
+  .legend { display:flex; gap:10px; flex-wrap:wrap; font-size:11px; color:var(--dim); margin:2px 0 3px; }
+  .legend i { display:inline-block; width:10px; height:2px; vertical-align:middle; margin-right:4px; border-radius:1px; }
+  .chart { display:block; width:100%; height:92px; cursor:crosshair; }
+  .tip { font-size:11px; color:var(--dim); min-height:15px; font-variant-numeric:tabular-nums; }
+  .dimmed { opacity:.45; }
   kbd { background:#1c212d; border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:11px; }
   #hud { position:fixed; left:12px; bottom:12px; color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums;
     background:rgba(11,13,18,.6); padding:5px 9px; border-radius:6px; pointer-events:none; }
+  #recview { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); width:min(720px,90vw); background:var(--panel);
+    border:1px solid var(--line); border-radius:10px; padding:12px; display:none; z-index:5; }
+  #recview video { width:100%; border-radius:6px; background:#000; display:block; }
+  #recview .seg { margin-top:8px; }
+  #recview a { text-decoration:none; }
+  button.rec { color:#ffb3ad; }
+  button.rec.on { background:#5a2424; border-color:#ff6e6e; color:#fff; }
+  input[type=text] { background:#1c212d; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font:inherit; min-width:0; }
   #toggle { position:fixed; top:12px; right:12px; display:none; }
   #panel.hidden ~ #toggle { display:block; }
 </style>
@@ -47,12 +64,40 @@
 
   <h2>Rules</h2>
   <div id="rules"></div>
+  <div class="help" id="rulesNote"></div>
 
   <h2>Perception</h2>
   <div id="perception"></div>
 
   <h2>Motion</h2>
   <div id="motion"></div>
+
+  <h2>Hunters</h2>
+  <div class="seg" id="hunterModes"><button data-h="none">None</button><button data-h="predators">Predators</button><button data-h="dogs">Sheepdogs</button></div>
+  <div id="hunterOpts">
+    <div id="hunters"></div>
+    <label class="chk predOnly"><input type="checkbox" id="evoBoids" checked><span>Boids evolve — each eaten boid is replaced by a mutated child of a long-lived survivor</span></label>
+    <label class="chk predOnly"><input type="checkbox" id="evoPreds" checked><span>Predators evolve — every 30 s the worst hunter is replaced by a mutant of the best</span></label>
+    <label class="chk predOnly"><input type="checkbox" id="confusion" checked><span>Confusion effect — a strike is less likely to land on a boid with many neighbours (up to 20)</span></label>
+    <label class="chk dogOnly"><input type="checkbox" id="dogLearn" checked><span>Dogs learn — each round tries a tweak to their herding and keeps it if the flock is penned faster</span></label>
+    <div class="stats" id="evostats"></div>
+    <div id="charts">
+      <h3 id="c1title"></h3><div class="legend" id="c1legend"></div>
+      <canvas class="chart" id="chart1"></canvas><div class="tip" id="tip1"></div>
+      <h3 id="c2title"></h3><div class="legend" id="c2legend"></div>
+      <canvas class="chart" id="chart2"></canvas><div class="tip" id="tip2"></div>
+    </div>
+  </div>
+
+  <h2>Drone show</h2>
+  <div class="seg"><button id="showBtn">▶ Start drone show</button><button id="showNext">Next ▸</button></div>
+  <div class="row"><label>Shape</label><select id="showShape" style="grid-column:span 2"></select></div>
+  <label class="chk"><input type="checkbox" id="showAuto" checked><span>Move on to the next shape automatically</span></label>
+  <div id="showSliders"></div>
+  <div class="row"><label>Your text</label><input id="showText" type="text" value="HELLO" maxlength="40" style="grid-column:span 2"></div>
+  <div class="seg"><button id="showTextBtn">Fly the text</button></div>
+  <div class="row"><label>Your image</label><input id="showImg" type="file" accept="image/*" style="grid-column:span 2; font-size:11px; min-width:0"></div>
+  <div class="help" id="showImgNote">Bright parts of the image get drones and dark parts stay empty, so pictures on a dark background work best.</div>
 
   <h2>Mouse</h2>
   <div class="seg" id="modes"></div>
@@ -62,29 +107,38 @@
   <div class="row"><label>Edges</label>
     <select id="edges" style="grid-column:span 2"><option value="wrap">Wrap around</option><option value="avoid">Steer away from walls</option></select></div>
   <div class="row"><label>Colour</label>
-    <select id="color" style="grid-column:span 2"><option value="heading">By heading</option><option value="density">By neighbour count</option><option value="mono">Plain</option></select></div>
+    <select id="color" style="grid-column:span 2"><option value="heading">By heading</option><option value="density">By neighbour count</option><option value="genes">By genes (sep red, align green, cohere blue)</option><option value="mono">Plain</option></select></div>
   <label class="chk"><input type="checkbox" id="trails"> Trails</label>
   <label class="chk" id="autoRow"><input type="checkbox" id="autorot" checked> Slowly rotate view</label>
   <div class="seg" style="margin-top:6px">
     <button id="pause">Pause</button><button id="stepbtn">Step</button><button id="reset">Scatter</button><button id="clearObs">Clear obstacles</button>
   </div>
-  <div class="help"><kbd>Space</kbd> pause · <kbd>S</kbd> step · <kbd>R</kbd> scatter · <kbd>D</kbd> 2D/3D · <kbd>H</kbd> hide panel</div>
+  <div class="seg" style="margin-top:6px"><button id="recbtn" class="rec">● Record video</button></div>
+  <div class="help"><kbd>Space</kbd> pause · <kbd>S</kbd> step · <kbd>R</kbd> scatter · <kbd>D</kbd> 2D/3D · <kbd>V</kbd> record · <kbd>H</kbd> hide panel</div>
 </aside>
 <button id="toggle">☰ Controls</button>
 <div id="hud"></div>
+<div id="recview">
+  <video id="recvideo" controls playsinline></video>
+  <div class="help" id="recinfo"></div>
+  <div class="seg"><a id="recdl"><button style="width:100%">Download</button></a><button id="recclose">Close</button></div>
+</div>
 
 <script>
 "use strict";
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const panel = document.getElementById('panel');
+const $ = id => document.getElementById(id);
 
 // ---------- parameters ----------
 const DEFAULTS = {
   count: 800, speed: 3.2, force: 0.07, radius: 50, sepRadius: 20, fov: 280,
   sep: 1.5, ali: 1.0, coh: 0.9, noise: 0.0, size: 1.0,
 };
-const P = Object.assign({ edges: 'wrap', color: 'heading', trails: false }, DEFAULTS);
+const P = Object.assign({ edges: 'wrap', color: 'heading', trails: false,
+  ff: 1, hunters: 4, hunterSpeed: 1.3, fear: 100, hold: 9 }, DEFAULTS);
+const FLEE_W = 3;            // weight of fleeing a hunter (or the mouse predator) when nothing evolves
 
 const PRESETS = {
   'Flock':       {},
@@ -111,8 +165,21 @@ const SLIDERS = {
     ['force', 'Max steering', 0.005, 0.4, 0.005],
     ['noise', 'Wander', 0, 1, 0.01],
     ['size', 'Size', 0.3, 3, 0.05],
+    ['ff', 'Sim speed ×', 1, 20, 1],
+  ],
+  showSliders: [
+    ['hold', 'Seconds per shape', 3, 40, 1],
+  ],
+  hunters: [
+    ['hunters', 'How many', 1, 30, 1],
+    ['hunterSpeed', 'Speed vs boids ×', 0.6, 2.5, 0.05],
+    ['fear', 'Boid fear radius', 10, 300, 1],
   ],
 };
+
+const rand = Math.random;
+function gauss() { let u = 0; while (u === 0) u = rand(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand()); }
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 
 // ---------- world ----------
 // 2D: the world is the window (z unused, always 0).  3D: a fixed box viewed by an orbiting camera.
@@ -141,7 +208,7 @@ function resize() {
 // ---------- camera (3D only) ----------
 function updateCamera() {
   cY = Math.cos(cam.yaw); sY = Math.sin(cam.yaw); cP = Math.cos(cam.pitch); sP = Math.sin(cam.pitch);
-  scx = (!panel.classList.contains('hidden') && W > 760) ? (W - 296) / 2 : W / 2;
+  scx = (!panel.classList.contains('hidden') && W > 760) ? (W - 306) / 2 : W / 2;
   scy = H / 2;
 }
 let PX = 0, PY = 0, PZ = 0, PS = 1;   // last projection: screen x, y, depth, pixels per world unit
@@ -168,23 +235,46 @@ const px = new Float32Array(MAX), py = new Float32Array(MAX), pz = new Float32Ar
 const vx = new Float32Array(MAX), vy = new Float32Array(MAX), vz = new Float32Array(MAX);
 const ax = new Float32Array(MAX), ay = new Float32Array(MAX), az = new Float32Array(MAX);
 const nbr = new Uint16Array(MAX);
+const pcx = new Float32Array(MAX), pcy = new Float32Array(MAX), pcz = new Float32Array(MAX);   // body-overlap corrections
+// genes: weights for separation, alignment, cohesion and fleeing.  They always sum to geneSum,
+// so evolution can only re-allocate a fixed steering budget, never buy more agility.
+const gS = new Float32Array(MAX), gA = new Float32Array(MAX), gC = new Float32Array(MAX), gF = new Float32Array(MAX);
+const age = new Float32Array(MAX);
+let geneSum = DEFAULTS.sep + DEFAULTS.ali + DEFAULTS.coh + FLEE_W;
 let N = 0;
 
+function normaliseGenes(i) {
+  let s = gS[i] + gA[i] + gC[i] + gF[i];
+  if (s < 1e-6) { gS[i] = gA[i] = gC[i] = gF[i] = 1; s = 4; }
+  const k = geneSum / s; gS[i] *= k; gA[i] *= k; gC[i] *= k; gF[i] *= k;
+}
+function seedGenes(i, noise) {
+  gS[i] = Math.max(0.01, P.sep * (1 + noise * gauss()));
+  gA[i] = Math.max(0.01, P.ali * (1 + noise * gauss()));
+  gC[i] = Math.max(0.01, P.coh * (1 + noise * gauss()));
+  gF[i] = Math.max(0.01, FLEE_W * (1 + noise * gauss()));
+  normaliseGenes(i);
+}
+
 function spawn(i) {
-  px[i] = Math.random() * WX; py[i] = Math.random() * WY; pz[i] = is3D ? Math.random() * WZ : 0;
-  const s = P.speed * (0.5 + 0.5 * Math.random()), a = Math.random() * Math.PI * 2;
+  px[i] = rand() * WX; py[i] = rand() * WY; pz[i] = is3D ? rand() * WZ : 0;
+  const s = P.speed * (0.5 + 0.5 * rand()), a = rand() * Math.PI * 2;
   if (is3D) {
-    const u = Math.random() * 2 - 1, r = Math.sqrt(1 - u * u);
+    const u = rand() * 2 - 1, r = Math.sqrt(1 - u * u);
     vx[i] = r * Math.cos(a) * s; vy[i] = u * s; vz[i] = r * Math.sin(a) * s;
   } else { vx[i] = Math.cos(a) * s; vy[i] = Math.sin(a) * s; vz[i] = 0; }
+  age[i] = 0;
 }
 function setCount(n) {
   n = Math.max(0, Math.min(MAX, n | 0));
-  for (let i = N; i < n; i++) spawn(i);
+  for (let i = N; i < n; i++) { spawn(i); spawnClear(i); seedGenes(i, evolvingBoids() ? 0.25 : 0); }
   N = n;
   if (focus >= N) focus = -1;
+  if (show.on) assignShow();
 }
-function scatter() { for (let i = 0; i < N; i++) spawn(i); }
+function scatter() {
+  for (let i = 0; i < N; i++) { spawn(i); spawnClear(i); }
+}
 
 // ---------- obstacles & pointer ----------
 const obstacles = [];   // {x, y, z, r}: circles in 2D, spheres in 3D
@@ -193,6 +283,99 @@ let mode = 'predator';
 let focus = -1;
 let focusDebug = null;
 const PRED_R = 130;
+
+// ---------- hunters: predators and sheepdogs ----------
+let hunterMode = 'none';
+const preds = [], dogs = [];
+let simSteps = 0;
+const evo = { kills: 0, births: 0, predReplacements: 0, strikes: 0, windowKills: 0, hist: [] };
+const PRED_SUM = 4.8;  // predator weight budget: chase + separation + alignment + cohesion
+
+function evolvingBoids() { return hunterMode === 'predators' && $('evoBoids').checked; }
+function hunterList() { return hunterMode === 'predators' ? preds : hunterMode === 'dogs' ? dogs : []; }
+
+function randomAgent() {
+  const a = rand() * Math.PI * 2;
+  return { x: rand() * WX, y: rand() * WY, z: is3D ? rand() * WZ : 0,
+           vx: Math.cos(a) * P.speed, vy: Math.sin(a) * P.speed, vz: 0, age: 0 };
+}
+function normalisePred(g) {
+  const s = g.chase + g.sep + g.ali + g.coh, k = PRED_SUM / s;
+  g.chase *= k; g.sep *= k; g.ali *= k; g.coh *= k;
+  return g;
+}
+function newPredGenes(noise) {
+  return normalisePred({
+    chase: Math.max(0.05, 3.0 * (1 + noise * gauss())), sep: Math.max(0.01, 1.0 * (1 + noise * gauss())),
+    ali: Math.max(0.01, 0.5 * (1 + noise * gauss())), coh: Math.max(0.01, 0.3 * (1 + noise * gauss())),
+    iso: clamp(noise * gauss(), -1, 2),          // >0 prefers isolated boids, <0 prefers crowded ones
+    lead: clamp(0.5 + noise * gauss(), 0, 2),   // how far ahead of the target to aim
+  });
+}
+function mutatePred(g) {
+  const m = { chase: g.chase, sep: g.sep, ali: g.ali, coh: g.coh, iso: g.iso, lead: g.lead };
+  for (const k of ['chase', 'sep', 'ali', 'coh']) m[k] = Math.max(0.01, m[k] + gauss() * 0.08 * PRED_SUM);
+  m.iso = clamp(m.iso + gauss() * 0.25, -1, 2);
+  m.lead = clamp(m.lead + gauss() * 0.15, 0, 2);
+  return normalisePred(m);
+}
+function makePredator(genes) {
+  return Object.assign(randomAgent(), { g: genes || newPredGenes(0.3), kills: 0, digest: 0, cool: 0, target: -1 });
+}
+
+// sheepdog genes: herding parameters after Strömbom et al. (2014)
+const DOG_DEFAULT = { drive: 1, collect: 1, offset: 30, standoff: 35 };
+function mutateDog(g) {
+  return {
+    drive: clamp(g.drive * Math.exp(0.2 * gauss()), 0.3, 3),
+    collect: clamp(g.collect * Math.exp(0.2 * gauss()), 0.4, 3),
+    offset: clamp(g.offset + 12 * gauss(), 5, 120),
+    standoff: clamp(g.standoff + 12 * gauss(), 0, 120),
+  };
+}
+const herd = {
+  pen: { x: 0, y: 0, z: 0, r: 100 }, round: 0, steps: 0, penned: 0,
+  inc: Object.assign({}, DOG_DEFAULT), incFit: null, incN: 0, cand: null, trying: 'inc',
+  genes: Object.assign({}, DOG_DEFAULT), hist: [], lastSecs: null,
+};
+const ROUND_LIMIT = 120 * 60;    // steps (two simulated minutes)
+
+function resizeHunters() {
+  const n = P.hunters | 0;
+  if (hunterMode === 'predators') {
+    while (preds.length < n) preds.push(makePredator(preds.length && $('evoPreds').checked ? mutatePred(bestPred().g) : null));
+    preds.length = Math.min(preds.length, n);
+  } else if (hunterMode === 'dogs') {
+    while (dogs.length < n) dogs.push(randomAgent());
+    dogs.length = Math.min(dogs.length, n);
+  }
+}
+function predRate(p) { return p.kills / Math.max(p.age, 600) * 3600; }   // kills per simulated minute
+function bestPred() { return preds.reduce((a, b) => predRate(b) > predRate(a) ? b : a, preds[0]); }
+
+let edgesBeforeDogs = null;
+function setHunterMode(m) {
+  if (m === hunterMode) return;
+  if (m !== 'none' && show.on) stopShow();
+  if (hunterMode === 'dogs' && edgesBeforeDogs) { P.edges = edgesBeforeDogs; edgesBeforeDogs = null; }
+  hunterMode = m;
+  preds.length = 0; dogs.length = 0;
+  if (m === 'predators') {
+    P.hunters = 4; P.hunterSpeed = 1.3;
+    if ($('evoBoids').checked) for (let i = 0; i < N; i++) { seedGenes(i, 0.25); age[i] = 0; }
+    Object.assign(evo, { kills: 0, births: 0, predReplacements: 0, strikes: 0, windowKills: 0, hist: [] });
+    simSteps = 0;
+  } else if (m === 'dogs') {
+    P.hunters = 3; P.hunterSpeed = 1.6;
+    edgesBeforeDogs = P.edges; P.edges = 'avoid';
+    if (N > 300) { P.count = 150; setCount(150); }
+    Object.assign(herd, { round: 0, hist: [], incFit: null, incN: 0, cand: null, trying: 'inc', lastSecs: null,
+      inc: Object.assign({}, DOG_DEFAULT), genes: Object.assign({}, DOG_DEFAULT) });
+  }
+  resizeHunters();
+  if (m === 'dogs') newRound();
+  syncUI(); refreshHunterUI();
+}
 
 // ---------- uniform grid for neighbour lookup ----------
 let gcols = 1, grows = 1, glays = 1, cw = 1, ch = 1, cd = 1;
@@ -244,6 +427,73 @@ function steer(dx, dy, dz, ux, uy, uz, maxS, maxF) {
   if (f > maxF) { const k = maxF / f; fx *= k; fy *= k; fz *= k; }
   sx_ = fx; sy_ = fy; sz_ = fz;
 }
+// shortest displacement, respecting wrap-around (results in dx_, dy_, dz_)
+let dx_ = 0, dy_ = 0, dz_ = 0;
+function delta(x0, y0, z0, x1, y1, z1) {
+  let dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+  if (P.edges === 'wrap') {
+    if (dx > WX / 2) dx -= WX; else if (dx < -WX / 2) dx += WX;
+    if (dy > WY / 2) dy -= WY; else if (dy < -WY / 2) dy += WY;
+    if (is3D) { if (dz > WZ / 2) dz -= WZ; else if (dz < -WZ / 2) dz += WZ; }
+  }
+  dx_ = dx; dy_ = dy; dz_ = dz;
+}
+
+// obstacle and wall avoidance shared by boids and hunters (adds into ex_, ey_, ez_)
+let ex_ = 0, ey_ = 0, ez_ = 0;
+function avoidance(x, y, z, hx, hy, hz, ux, uy, uz, maxS, maxF) {
+  ex_ = 0; ey_ = 0; ez_ = 0;
+  for (let o = 0; o < obstacles.length; o++) {
+    const ob = obstacles[o];
+    const dx = x - ob.x, dy = y - ob.y, dz = z - ob.z, d = Math.hypot(dx, dy, dz);
+    const reach = ob.r + Math.max(30, P.radius);
+    if (d < reach && d > 1e-6) {
+      const t = 1 - Math.max(0, d - ob.r) / (reach - ob.r);
+      const rx = dx / d, ry = dy / d, rz = dz / d;
+      // sidestep: the part of the heading perpendicular to the radial direction
+      const dot = hx * rx + hy * ry + hz * rz;
+      let tx = hx - dot * rx, ty = hy - dot * ry, tz = hz - dot * rz;
+      const tl = Math.hypot(tx, ty, tz);
+      if (tl > 1e-6) { tx /= tl; ty /= tl; tz /= tl; } else { tx = -ry; ty = rx; tz = 0; }
+      steer(rx + tx * 0.7, ry + ty * 0.7, rz + tz * 0.7, ux, uy, uz, maxS, maxF);
+      const w = 4 * t * t * (1 + t);
+      ex_ += w * sx_; ey_ += w * sy_; ez_ += w * sz_;
+    }
+  }
+  if (P.edges !== 'wrap') {   // Reynolds' containment
+    const m = Math.min(80, Math.min(WX, WY, is3D ? WZ : Infinity) * 0.15);
+    let ex = 0, ey = 0, ez = 0, t = 0;
+    if (x < m) { ex = 1; t = Math.max(t, 1 - x / m); } else if (x > WX - m) { ex = -1; t = Math.max(t, 1 - (WX - x) / m); }
+    if (y < m) { ey = 1; t = Math.max(t, 1 - y / m); } else if (y > WY - m) { ey = -1; t = Math.max(t, 1 - (WY - y) / m); }
+    if (is3D) { if (z < m) { ez = 1; t = Math.max(t, 1 - z / m); } else if (z > WZ - m) { ez = -1; t = Math.max(t, 1 - (WZ - z) / m); } }
+    if (ex || ey || ez) { steer(ex, ey, ez, ux, uy, uz, maxS, maxF); ex_ += 3 * t * sx_; ey_ += 3 * t * sy_; ez_ += 3 * t * sz_; }
+  }
+}
+
+// keep a position inside the world and outside obstacles; returns via mx_, my_, mz_ (may flip velocity)
+let mx_ = 0, my_ = 0, mz_ = 0;
+function confine(x, y, z, v) {
+  if (show.on) { /* drones fly freely during a show */ }
+  else if (P.edges === 'wrap') {
+    x = x < 0 || x >= WX ? ((x % WX) + WX) % WX : x;
+    y = y < 0 || y >= WY ? ((y % WY) + WY) % WY : y;
+    if (is3D) z = z < 0 || z >= WZ ? ((z % WZ) + WZ) % WZ : z;
+  } else {
+    if (x < 0) { x = 0; v[0] = Math.abs(v[0]); } else if (x > WX) { x = WX; v[0] = -Math.abs(v[0]); }
+    if (y < 0) { y = 0; v[1] = Math.abs(v[1]); } else if (y > WY) { y = WY; v[1] = -Math.abs(v[1]); }
+    if (is3D) { if (z < 0) { z = 0; v[2] = Math.abs(v[2]); } else if (z > WZ) { z = WZ; v[2] = -Math.abs(v[2]); } }
+  }
+  if (!is3D) z = 0;
+  for (let o = 0; o < obstacles.length; o++) {
+    const ob = obstacles[o], dx = x - ob.x, dy = y - ob.y, dz = z - ob.z, d = Math.hypot(dx, dy, dz);
+    if (d < ob.r + 1) {
+      if (d < 1e-6) x = ob.x + ob.r + 1;
+      else { const k = (ob.r + 1) / d; x = ob.x + dx * k; y = ob.y + dy * k; z = ob.z + dz * k; }
+    }
+  }
+  mx_ = x; my_ = y; mz_ = z;
+}
+const vtmp = [0, 0, 0];
 
 function step() {
   buildGrid();
@@ -255,6 +505,11 @@ function step() {
   const debug = focus >= 0 && focus < N;
   focusDebug = null;
   const usePointer = pointer.inside && (mode === 'predator' || mode === 'attract');
+  const evolving = evolvingBoids();
+  const hunters = hunterList(), fear2 = P.fear * P.fear;
+  const showOn = show.on, showS = Math.max(P.speed * 1.6, 5);
+  const dmin = (is3D ? 7 : 5.5) * P.size, dmin2 = dmin * dmin;
+  if (showOn) updateShowTargets();
 
   for (let i = 0; i < N; i++) {
     const x = px[i], y = py[i], z = pz[i], ux = vx[i], uy = vy[i], uz = vz[i];
@@ -284,6 +539,8 @@ function step() {
             const d2 = dx * dx + dy * dy + dz * dz;
             if (d2 > r2 || d2 < 1e-6) continue;
             const d = Math.sqrt(d2);
+            // boids are solid: overlapping bodies are pushed apart (whatever the steering genes say)
+            if (d2 < dmin2 && !showOn) { const k = (dmin - d) * 0.5 / d; pcx[i] -= dx * k; pcy[i] -= dy * k; pcz[i] -= dz * k; }
             if ((dx * hx + dy * hy + dz * hz) / d < cosHalf) continue;   // behind the boid: outside its field of view
             n++; avx += vx[j]; avy += vy[j]; avz += vz[j]; cx += dx; cy += dy; cz += dz;
             if (d2 < s2) { sx -= dx / d2; sy -= dy / d2; sz -= dz / d2; ns++; } // repulsion weighted by 1/distance
@@ -294,57 +551,60 @@ function step() {
     }
     nbr[i] = n;
 
+    if (showOn) {
+      // fly to this boid's target point, slowing on arrival; separation only while travelling
+      const gx = show.tx[i] - x, gy = show.ty[i] - y, gz = show.tz[i] - z, d = Math.hypot(gx, gy, gz), want = Math.min(showS, d * 0.06);
+      let fx = (d > 1e-6 ? gx / d * want : 0) - ux, fy = (d > 1e-6 ? gy / d * want : 0) - uy, fz = (d > 1e-6 ? gz / d * want : 0) - uz;
+      const f = Math.hypot(fx, fy, fz), cap = maxF * 6;
+      if (f > cap) { fx *= cap / f; fy *= cap / f; fz *= cap / f; }
+      if (ns) { steer(sx, sy, sz, ux, uy, uz, showS, maxF * 2); const w = Math.min(1, d / 30) * 0.8; fx += w * sx_; fy += w * sy_; fz += w * sz_; }
+      if (usePointer && mode === 'predator') {
+        delta(x, y, z, pointer.wx, pointer.wy, pointer.wz);
+        const pd = Math.hypot(dx_, dy_, dz_);
+        if (pd < PRED_R) { const t = 1 - pd / PRED_R; steer(-dx_, -dy_, -dz_, ux, uy, uz, showS, maxF * 6); fx += 3 * t * sx_; fy += 3 * t * sy_; fz += 3 * t * sz_; }
+      }
+      ax[i] = fx; ay[i] = fy; az[i] = fz;
+      continue;
+    }
+
+    const wS = evolving ? gS[i] : P.sep, wA = evolving ? gA[i] : P.ali, wC = evolving ? gC[i] : P.coh, wF = evolving ? gF[i] : FLEE_W;
     let fx = 0, fy = 0, fz = 0;
     let fSep = [0, 0, 0], fAli = [0, 0, 0], fCoh = [0, 0, 0];
     if (ns) {
-      steer(sx, sy, sz, ux, uy, uz, maxS, maxF); fx += P.sep * sx_; fy += P.sep * sy_; fz += P.sep * sz_;
-      if (isFocus) fSep = [P.sep * sx_, P.sep * sy_, P.sep * sz_];
+      steer(sx, sy, sz, ux, uy, uz, maxS, maxF); fx += wS * sx_; fy += wS * sy_; fz += wS * sz_;
+      if (isFocus) fSep = [wS * sx_, wS * sy_, wS * sz_];
     }
     if (n) {
-      steer(avx, avy, avz, ux, uy, uz, maxS, maxF); fx += P.ali * sx_; fy += P.ali * sy_; fz += P.ali * sz_;
-      if (isFocus) fAli = [P.ali * sx_, P.ali * sy_, P.ali * sz_];
-      steer(cx, cy, cz, ux, uy, uz, maxS, maxF); fx += P.coh * sx_; fy += P.coh * sy_; fz += P.coh * sz_;
-      if (isFocus) fCoh = [P.coh * sx_, P.coh * sy_, P.coh * sz_];
+      steer(avx, avy, avz, ux, uy, uz, maxS, maxF); fx += wA * sx_; fy += wA * sy_; fz += wA * sz_;
+      if (isFocus) fAli = [wA * sx_, wA * sy_, wA * sz_];
+      steer(cx, cy, cz, ux, uy, uz, maxS, maxF); fx += wC * sx_; fy += wC * sy_; fz += wC * sz_;
+      if (isFocus) fCoh = [wC * sx_, wC * sy_, wC * sz_];
     }
 
-    // obstacles: steer away, stronger the closer we get, with a sidestep so boids slide round them
-    for (let o = 0; o < obstacles.length; o++) {
-      const ob = obstacles[o];
-      const dx = x - ob.x, dy = y - ob.y, dz = z - ob.z, d = Math.hypot(dx, dy, dz);
-      const reach = ob.r + Math.max(30, P.radius);
-      if (d < reach && d > 1e-6) {
-        const t = 1 - Math.max(0, d - ob.r) / (reach - ob.r);
-        const rx = dx / d, ry = dy / d, rz = dz / d;
-        // tangent: the component of the heading perpendicular to the radial direction
-        const dot = hx * rx + hy * ry + hz * rz;
-        let tx = hx - dot * rx, ty = hy - dot * ry, tz = hz - dot * rz;
-        const tl = Math.hypot(tx, ty, tz);
-        if (tl > 1e-6) { tx /= tl; ty /= tl; tz /= tl; } else if (is3D) { tx = -ry; ty = rx; tz = 0; } else { tx = -ry; ty = rx; tz = 0; }
-        steer(rx + tx * 0.7, ry + ty * 0.7, rz + tz * 0.7, ux, uy, uz, maxS, maxF);
-        const w = 4 * t * t * (1 + t);
-        fx += w * sx_; fy += w * sy_; fz += w * sz_;
-      }
-    }
+    avoidance(x, y, z, hx, hy, hz, ux, uy, uz, maxS, maxF);
+    fx += ex_; fy += ey_; fz += ez_;
 
-    // walls (when not wrapping): Reynolds' containment
-    if (!wrap) {
-      const m = Math.min(80, Math.min(WX, WY, is3D ? WZ : Infinity) * 0.15);
-      let ex = 0, ey = 0, ez = 0, t = 0;
-      if (x < m) { ex = 1; t = Math.max(t, 1 - x / m); } else if (x > WX - m) { ex = -1; t = Math.max(t, 1 - (WX - x) / m); }
-      if (y < m) { ey = 1; t = Math.max(t, 1 - y / m); } else if (y > WY - m) { ey = -1; t = Math.max(t, 1 - (WY - y) / m); }
-      if (is3D) { if (z < m) { ez = 1; t = Math.max(t, 1 - z / m); } else if (z > WZ - m) { ez = -1; t = Math.max(t, 1 - (WZ - z) / m); } }
-      if (ex || ey || ez) { steer(ex, ey, ez, ux, uy, uz, maxS, maxF); fx += 3 * t * sx_; fy += 3 * t * sy_; fz += 3 * t * sz_; }
-    }
-
-    // pointer: predator to flee from, or a target to seek
-    if (usePointer) {
-      let dx = pointer.wx - x, dy = pointer.wy - y, dz = pointer.wz - z;
+    // flee hunters (seen all round, out to the fear radius)
+    for (let h = 0; h < hunters.length; h++) {
+      const o = hunters[h];
+      let dx = o.x - x, dy = o.y - y, dz = o.z - z;
       if (wrap) {
         if (dx > hw) dx -= WX; else if (dx < -hw) dx += WX;
         if (dy > hh) dy -= WY; else if (dy < -hh) dy += WY;
         if (is3D) { if (dz > hd) dz -= WZ; else if (dz < -hd) dz += WZ; }
       }
-      const d = Math.hypot(dx, dy, dz);
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < fear2) {
+        const t = 1 - Math.sqrt(d2) / P.fear;
+        steer(-dx, -dy, -dz, ux, uy, uz, maxS, maxF * 2);
+        fx += wF * t * sx_; fy += wF * t * sy_; fz += wF * t * sz_;
+      }
+    }
+
+    // pointer: predator to flee from, or a target to seek
+    if (usePointer) {
+      delta(x, y, z, pointer.wx, pointer.wy, pointer.wz);
+      const dx = dx_, dy = dy_, dz = dz_, d = Math.hypot(dx, dy, dz);
       if (mode === 'predator') {
         if (d < PRED_R) { const t = 1 - d / PRED_R; steer(-dx, -dy, -dz, ux, uy, uz, maxS * 1.6, maxF * 3); fx += 3 * t * sx_; fy += 3 * t * sy_; fz += 3 * t * sz_; }
       } else {
@@ -353,8 +613,8 @@ function step() {
     }
 
     if (P.noise > 0) {
-      const m = P.noise * maxF * 2, a = Math.random() * Math.PI * 2;
-      if (is3D) { const u = Math.random() * 2 - 1, r = Math.sqrt(1 - u * u); fx += r * Math.cos(a) * m; fy += u * m; fz += r * Math.sin(a) * m; }
+      const m = P.noise * maxF * 2, a = rand() * Math.PI * 2;
+      if (is3D) { const u = rand() * 2 - 1, r = Math.sqrt(1 - u * u); fx += r * Math.cos(a) * m; fy += u * m; fz += r * Math.sin(a) * m; }
       else { fx += Math.cos(a) * m; fy += Math.sin(a) * m; }
     }
 
@@ -363,35 +623,694 @@ function step() {
   }
 
   // integrate all boids after every force is computed, so update order doesn't matter
-  const minS = maxS * 0.35;
+  const minS = showOn ? 0 : maxS * 0.35, capS = showOn ? showS : maxS;   // drones may hover; boids keep flying
   for (let i = 0; i < N; i++) {
     let ux = vx[i] + ax[i], uy = vy[i] + ay[i], uz = vz[i] + az[i];
     const s = Math.hypot(ux, uy, uz);
-    if (s > maxS) { const k = maxS / s; ux *= k; uy *= k; uz *= k; }
+    if (s > capS) { const k = capS / s; ux *= k; uy *= k; uz *= k; }
     else if (s < minS) { if (s < 1e-6) { ux = minS; uy = 0; uz = 0; } else { const k = minS / s; ux *= k; uy *= k; uz *= k; } }
-    vx[i] = ux; vy[i] = uy; vz[i] = uz;
-    let x = px[i] + ux, y = py[i] + uy, z = pz[i] + uz;
-    if (wrap) {
-      x = x < 0 || x >= WX ? ((x % WX) + WX) % WX : x;
-      y = y < 0 || y >= WY ? ((y % WY) + WY) % WY : y;
-      if (is3D) z = z < 0 || z >= WZ ? ((z % WZ) + WZ) % WZ : z;
-    } else {
-      if (x < 0) { x = 0; vx[i] = Math.abs(ux); } else if (x > WX) { x = WX; vx[i] = -Math.abs(ux); }
-      if (y < 0) { y = 0; vy[i] = Math.abs(uy); } else if (y > WY) { y = WY; vy[i] = -Math.abs(uy); }
-      if (is3D) { if (z < 0) { z = 0; vz[i] = Math.abs(uz); } else if (z > WZ) { z = WZ; vz[i] = -Math.abs(uz); } }
-    }
-    if (!is3D) z = 0;
-    // never end a step inside an obstacle
-    for (let o = 0; o < obstacles.length; o++) {
-      const ob = obstacles[o], dx = x - ob.x, dy = y - ob.y, dz = z - ob.z, d = Math.hypot(dx, dy, dz);
-      if (d < ob.r + 1) {
-        if (d < 1e-6) { x = ob.x + ob.r + 1; }
-        else { const k = (ob.r + 1) / d; x = ob.x + dx * k; y = ob.y + dy * k; z = ob.z + dz * k; }
+    vtmp[0] = ux; vtmp[1] = uy; vtmp[2] = uz;
+    confine(px[i] + ux + pcx[i], py[i] + uy + pcy[i], pz[i] + uz + pcz[i], vtmp);
+    pcx[i] = 0; pcy[i] = 0; pcz[i] = 0;
+    px[i] = mx_; py[i] = my_; pz[i] = mz_;
+    vx[i] = vtmp[0]; vy[i] = vtmp[1]; vz[i] = is3D ? vtmp[2] : 0;
+    age[i]++;
+  }
+
+  if (showOn) advanceShow();
+  if (hunterMode === 'predators') stepPredators();
+  else if (hunterMode === 'dogs') stepDogs();
+  simSteps++;
+}
+
+// move a hunter: add force, clamp speed, confine
+function moveAgent(o, fx, fy, fz, maxS, maxF) {
+  const f = Math.hypot(fx, fy, fz);
+  if (f > maxF) { const k = maxF / f; fx *= k; fy *= k; fz *= k; }
+  let ux = o.vx + fx, uy = o.vy + fy, uz = is3D ? o.vz + fz : 0;
+  const s = Math.hypot(ux, uy, uz), minS = Math.min(maxS, P.speed * 0.2);
+  if (s > maxS) { const k = maxS / s; ux *= k; uy *= k; uz *= k; }
+  else if (s < minS && s > 1e-6) { const k = minS / s; ux *= k; uy *= k; uz *= k; }
+  vtmp[0] = ux; vtmp[1] = uy; vtmp[2] = uz;
+  confine(o.x + ux, o.y + uy, o.z + uz, vtmp);
+  o.x = mx_; o.y = my_; o.z = mz_; o.vx = vtmp[0]; o.vy = vtmp[1]; o.vz = is3D ? vtmp[2] : 0;
+  o.age++;
+}
+
+// ---------- predators ----------
+const SENSE = 220;    // how far a predator can pick out a target
+function stepPredators() {
+  const maxS = P.speed * P.hunterSpeed, baseF = P.force;
+  const catchR = 5 + 4 * P.size;
+  for (const p of preds) {
+    if (p.digest > 0) p.digest--;
+    if (p.cool > 0) p.cool--;
+    const sp = Math.hypot(p.vx, p.vy, p.vz) || 1, hx = p.vx / sp, hy = p.vy / sp, hz = p.vz / sp;
+    const g = p.g;
+
+    // target choice: nearest boid, biased by the iso gene toward lonely (or crowded) boids
+    let best = -1, bestScore = Infinity, near = -1, nearD = Infinity;
+    for (let j = 0; j < N; j++) {
+      delta(p.x, p.y, p.z, px[j], py[j], pz[j]);
+      const d = Math.hypot(dx_, dy_, dz_);
+      if (d < nearD) { nearD = d; near = j; }
+      if (d < SENSE) {
+        const score = d - g.iso * SENSE * 0.5 / (1 + nbr[j]);
+        if (score < bestScore) { bestScore = score; best = j; }
       }
     }
-    px[i] = x; py[i] = y; pz[i] = z;
+    const inRange = best >= 0;
+    if (!inRange) best = near;
+    p.target = best;
+
+    let fx = 0, fy = 0, fz = 0;
+    if (best >= 0 && p.digest === 0) {
+      delta(p.x, p.y, p.z, px[best], py[best], pz[best]);
+      const d = Math.hypot(dx_, dy_, dz_), lt = g.lead * d / maxS;  // aim where the target will be
+      steer(dx_ + vx[best] * lt, dy_ + vy[best] * lt, dz_ + vz[best] * lt, p.vx, p.vy, p.vz, maxS, baseF);
+      const w = g.chase * (inRange ? 1 : 0.5);
+      fx += w * sx_; fy += w * sy_; fz += w * sz_;
+    }
+    // flock with other predators
+    let n = 0, avx = 0, avy = 0, avz = 0, cx = 0, cy = 0, cz = 0, sx = 0, sy = 0, sz = 0, ns = 0;
+    for (const q of preds) {
+      if (q === p) continue;
+      delta(p.x, p.y, p.z, q.x, q.y, q.z);
+      const d2 = dx_ * dx_ + dy_ * dy_ + dz_ * dz_;
+      if (d2 > 160 * 160 || d2 < 1e-6) continue;
+      n++; avx += q.vx; avy += q.vy; avz += q.vz; cx += dx_; cy += dy_; cz += dz_;
+      if (d2 < 50 * 50) { sx -= dx_ / d2; sy -= dy_ / d2; sz -= dz_ / d2; ns++; }
+    }
+    if (ns) { steer(sx, sy, sz, p.vx, p.vy, p.vz, maxS, baseF); fx += g.sep * sx_; fy += g.sep * sy_; fz += g.sep * sz_; }
+    if (n) {
+      steer(avx, avy, avz, p.vx, p.vy, p.vz, maxS, baseF); fx += g.ali * sx_; fy += g.ali * sy_; fz += g.ali * sz_;
+      steer(cx, cy, cz, p.vx, p.vy, p.vz, maxS, baseF); fx += g.coh * sx_; fy += g.coh * sy_; fz += g.coh * sz_;
+    }
+    avoidance(p.x, p.y, p.z, hx, hy, hz, p.vx, p.vy, p.vz, maxS, baseF);
+    fx += ex_; fy += ey_; fz += ez_;
+    // total steering is capped, so the predator's genes only share out its agility
+    moveAgent(p, fx, fy, fz, p.digest > 0 ? maxS * 0.5 : maxS, baseF * 3);
+
+    // strike
+    if (best >= 0 && p.digest === 0 && p.cool === 0) {
+      delta(p.x, p.y, p.z, px[best], py[best], pz[best]);
+      if (Math.hypot(dx_, dy_, dz_) < catchR) {
+        evo.strikes++;
+        // confusion saturates: past 20 neighbours a crowd gives no extra cover (strikes land ≥ 25% of the time),
+        // otherwise evolution just piles boids on top of one another
+        const chance = $('confusion').checked ? 1 / (1 + 0.15 * Math.min(nbr[best], 20)) : 1;
+        if (rand() < chance) { eat(best); p.kills++; p.digest = 45; }
+        else p.cool = 20;
+      }
+    }
+  }
+
+  // predator selection: every 30 simulated seconds the worst is replaced by a mutant of the best
+  if ($('evoPreds').checked && preds.length >= 2 && simSteps % 1800 === 1799) {
+    const old = preds.filter(p => p.age > 1200);
+    if (old.length >= 2) {
+      const worst = old.reduce((a, b) => predRate(b) < predRate(a) ? b : a);
+      const best = bestPred();
+      if (worst !== best) {
+        preds[preds.indexOf(worst)] = makePredator(mutatePred(best.g));
+        evo.predReplacements++;
+      }
+    }
+  }
+  if (simSteps % 600 === 599) recordEvo();
+}
+
+// a boid is eaten: it comes back as a new boid somewhere away from the predators
+function eat(j) {
+  evo.kills++; evo.windowKills++;
+  if (j === focus) focus = -1;
+  if (evolvingBoids() && N > 1) {
+    // parent: the oldest of three random survivors (survival time is the only fitness)
+    let parent = -1;
+    for (let t = 0; t < 3; t++) {
+      let k = (rand() * N) | 0; if (k === j) k = (k + 1) % N;
+      if (parent < 0 || age[k] > age[parent]) parent = k;
+    }
+    const m = 0.06 * geneSum;
+    gS[j] = Math.max(0, gS[parent] + gauss() * m); gA[j] = Math.max(0, gA[parent] + gauss() * m);
+    gC[j] = Math.max(0, gC[parent] + gauss() * m); gF[j] = Math.max(0, gF[parent] + gauss() * m);
+    normaliseGenes(j);
+    evo.births++;
+  }
+  spawn(j); spawnClear(j);
+}
+// re-roll a new boid's position until it is clear of hunters and (when herding) the pen
+function spawnClear(i) {
+  const hunters = hunterList();
+  for (let tries = 0; tries < 20; tries++) {
+    let ok = true;
+    for (const o of hunters) { delta(o.x, o.y, o.z, px[i], py[i], pz[i]); if (Math.hypot(dx_, dy_, dz_) < 150) { ok = false; break; } }
+    if (ok && hunterMode === 'dogs') {
+      const pen = herd.pen;
+      if (Math.hypot(px[i] - pen.x, py[i] - pen.y, pz[i] - pen.z) < pen.r * 1.4) ok = false;
+    }
+    if (ok) return;
+    px[i] = rand() * WX; py[i] = rand() * WY; pz[i] = is3D ? rand() * WZ : 0;
   }
 }
+
+function geneMeans() {
+  let s = 0, a = 0, c = 0, f = 0;
+  for (let i = 0; i < N; i++) { s += gS[i]; a += gA[i]; c += gC[i]; f += gF[i]; }
+  const t = (s + a + c + f) || 1;
+  return { sep: s / t, ali: a / t, coh: c / t, flee: f / t };
+}
+function predMeans() {
+  const m = { chase: 0, sep: 0, ali: 0, coh: 0, iso: 0, lead: 0 };
+  for (const p of preds) for (const k in m) m[k] += p.g[k];
+  for (const k in m) m[k] /= Math.max(1, preds.length);
+  return m;
+}
+function recordEvo() {
+  const gm = geneMeans();
+  evo.hist.push({ t: simSteps / 3600, ...gm, kpm: evo.windowKills / (600 / 3600), pol: polarisation() });
+  evo.windowKills = 0;
+  if (evo.hist.length > 300) evo.hist = evo.hist.filter((_, k) => k % 2 === 0);
+}
+
+// ---------- sheepdogs ----------
+function penRadius() {
+  return is3D ? Math.cbrt(3 * N / (4 * Math.PI)) * P.sepRadius * 1.6 : Math.sqrt(N / Math.PI) * P.sepRadius * 1.4;
+}
+function newRound() {
+  const r = penRadius(), inset = r + 20;
+  let corners;
+  if (is3D) { corners = []; for (let k = 0; k < 8; k++) corners.push([k & 1, (k >> 1) & 1, (k >> 2) & 1]); }
+  else corners = [[0, 0, 0], [0, 1, 0], [1, 1, 0]];     // the top-right corner sits under the panel
+  const prev = herd.pen;
+  let c;
+  do { c = corners[(rand() * corners.length) | 0]; }
+  while (corners.length > 1 && Math.abs((c[0] ? WX - inset : inset) - prev.x) < 1 && Math.abs((c[1] ? WY - inset : inset) - prev.y) < 1 && Math.abs((is3D ? (c[2] ? WZ - inset : inset) : 0) - prev.z) < 1);
+  herd.pen = { x: c[0] ? WX - inset : inset, y: c[1] ? WY - inset : inset, z: is3D ? (c[2] ? WZ - inset : inset) : 0, r };
+  herd.steps = 0; herd.round++;
+  // choose which herding genes this round tests
+  if ($('dogLearn').checked && herd.incFit !== null && herd.trying === 'inc') { herd.cand = mutateDog(herd.inc); herd.trying = 'cand'; }
+  else herd.trying = 'inc';
+  herd.genes = herd.trying === 'cand' ? herd.cand : herd.inc;
+  scatter();
+}
+function endRound(success) {
+  const secs = herd.steps / 60;
+  const frac = herd.penned / Math.max(1, N);
+  const fit = success ? secs : (ROUND_LIMIT / 60) * (2 - frac);   // a timeout scores worse than any success
+  herd.hist.push({ round: herd.round, secs, ok: success, which: herd.trying, frac });
+  if (herd.hist.length > 300) herd.hist.shift();
+  herd.lastSecs = success ? secs : null;
+  if (herd.trying === 'inc') {
+    herd.incFit = herd.incFit === null ? fit : (herd.incFit * herd.incN + fit) / (herd.incN + 1);
+    herd.incN++;
+  } else if (fit < herd.incFit) {
+    herd.inc = herd.cand; herd.incFit = fit; herd.incN = 1;      // the tweak was better: keep it
+  }
+  newRound();
+}
+const DOG_LATERAL = 55;
+function stepDogs() {
+  if (!N) return;
+  const g = herd.genes, pen = herd.pen;
+  pen.r = penRadius();
+  // flock centre and how spread out it is
+  let Gx = 0, Gy = 0, Gz = 0;
+  for (let i = 0; i < N; i++) { Gx += px[i]; Gy += py[i]; Gz += pz[i]; }
+  Gx /= N; Gy /= N; Gz /= N;
+  const f = g.collect * P.sepRadius * Math.sqrt(N) * 0.9;
+  const strag = [];
+  let penned = 0;
+  for (let i = 0; i < N; i++) {
+    const d = Math.hypot(px[i] - Gx, py[i] - Gy, pz[i] - Gz);
+    if (d > f) strag.push([d, i]);
+    if (Math.hypot(px[i] - pen.x, py[i] - pen.y, pz[i] - pen.z) < pen.r) penned++;
+  }
+  herd.penned = penned;
+  strag.sort((a, b) => b[0] - a[0]);
+  const cands = strag.slice(0, dogs.length * 3).map(s => s[1]);
+  // driving direction: from the pen through the flock centre
+  let ux = Gx - pen.x, uy = Gy - pen.y, uz = Gz - pen.z;
+  const ul = Math.hypot(ux, uy, uz) || 1; ux /= ul; uy /= ul; uz /= ul;
+  let qx = -uy, qy = ux, qz = 0;                        // a sideways direction for spreading dogs out
+  if (is3D) { qx = -uz; qy = 0; qz = ux; const ql = Math.hypot(qx, qz); if (ql < 1e-3) { qx = 1; qz = 0; } else { qx /= ql; qz /= ql; } }
+  const driveDist = g.drive * (P.sepRadius * Math.sqrt(N) * 0.6 + 30);
+  const maxS = P.speed * P.hunterSpeed, maxF = P.force * 2.5;
+  const claimed = new Set();
+  dogs.forEach((dog, k) => {
+    let tx, ty, tz;
+    // collect: the nearest unclaimed straggler, approached from the side away from the flock centre
+    let pick = -1, pd = Infinity;
+    for (const i of cands) {
+      if (claimed.has(i)) continue;
+      const d = Math.hypot(px[i] - dog.x, py[i] - dog.y, pz[i] - dog.z);
+      if (d < pd) { pd = d; pick = i; }
+    }
+    if (pick >= 0) {
+      claimed.add(pick);
+      let ox = px[pick] - Gx, oy = py[pick] - Gy, oz = pz[pick] - Gz; const ol = Math.hypot(ox, oy, oz) || 1;
+      tx = px[pick] + ox / ol * g.offset; ty = py[pick] + oy / ol * g.offset; tz = pz[pick] + oz / ol * g.offset;
+    } else {
+      // drive: stand behind the flock, opposite the pen, spread sideways
+      const lat = (k - (dogs.length - 1) / 2) * DOG_LATERAL;
+      tx = Gx + ux * driveDist + qx * lat; ty = Gy + uy * driveDist + qy * lat; tz = Gz + uz * driveDist + qz * lat;
+    }
+    tx = clamp(tx, 10, WX - 10); ty = clamp(ty, 10, WY - 10); tz = is3D ? clamp(tz, 10, WZ - 10) : 0;
+    dog.tx = tx; dog.ty = ty; dog.tz = tz;
+    // arrive at the target point
+    const dx = tx - dog.x, dy = ty - dog.y, dz = tz - dog.z, d = Math.hypot(dx, dy, dz);
+    let nearest = Infinity;
+    for (let i = 0; i < N; i++) { const e = Math.abs(px[i] - dog.x) + Math.abs(py[i] - dog.y) + Math.abs(pz[i] - dog.z); if (e < nearest) nearest = e; }
+    const cap = nearest < g.standoff ? maxS * 0.3 : maxS;     // creep when right on top of the flock
+    let fx = 0, fy = 0, fz = 0;
+    if (d > 1e-6) {
+      const want = cap * Math.min(1, d / 60);
+      fx = dx / d * want - dog.vx; fy = dy / d * want - dog.vy; fz = dz / d * want - dog.vz;
+    }
+    for (const o of dogs) {
+      if (o === dog) continue;
+      const ex = dog.x - o.x, ey = dog.y - o.y, ez = dog.z - o.z, e = Math.hypot(ex, ey, ez);
+      if (e < 60 && e > 1e-6) { const t = 1 - e / 60; fx += ex / e * maxF * t; fy += ey / e * maxF * t; fz += ez / e * maxF * t; }
+    }
+    const sp = Math.hypot(dog.vx, dog.vy, dog.vz) || 1;
+    avoidance(dog.x, dog.y, dog.z, dog.vx / sp, dog.vy / sp, dog.vz / sp, dog.vx, dog.vy, dog.vz, maxS, maxF);
+    fx += ex_; fy += ey_; fz += ez_;
+    moveAgent(dog, fx, fy, fz, cap, maxF * 2);
+  });
+  herd.steps++;
+  if (penned >= Math.ceil(N * 0.9)) endRound(true);
+  else if (herd.steps >= ROUND_LIMIT) endRound(false);
+}
+
+// ---------- drone show ----------
+// Each shape is drawn on a hidden canvas, spread into one target point per boid (a hex grid fitted to the
+// filled area), coloured from the drawing, and optionally bent over time by anim(x, y, t) -> AX, AY, AZ.
+let AX = 0, AY = 0, AZ = 0;
+function mulberry(seed) {
+  return () => { seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+function ell(c, x, y, rx, ry, rot = 0) { c.beginPath(); c.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2); c.fill(); }
+function star(c, x, y, R, r, n = 5, rot = -Math.PI / 2) {
+  c.beginPath();
+  for (let k = 0; k < n * 2; k++) { const a = rot + k * Math.PI / n, q = k % 2 ? r : R; c.lineTo(x + q * Math.cos(a), y + q * Math.sin(a)); }
+  c.closePath(); c.fill();
+}
+function tri(c, a, b, d, e, f, g) { c.beginPath(); c.moveTo(a, b); c.lineTo(d, e); c.lineTo(f, g); c.closePath(); c.fill(); }
+function line(c, a, b, d, e) { c.beginPath(); c.moveTo(a, b); c.lineTo(d, e); c.stroke(); }
+function hole(c, f) { c.save(); c.globalCompositeOperation = 'destination-out'; f(); c.restore(); }
+function turn(x, y, a) { AX = x * Math.cos(a); AY = y; AZ = x * Math.sin(a); }   // rotate about the vertical axis (2D: narrows)
+
+const SHAPES = [
+  { name: 'Chinese dragon', w: 1080, h: 380,
+    draw(c, w, h) {
+      const cy = h / 2;
+      const bw = x => 54 * (1 - 0.78 * Math.min(1, Math.max(0, (x - 250) / 760)));
+      c.fillStyle = '#e8302a';
+      for (let x = 250; x < 1010; x += 3) ell(c, x, cy, bw(x) / 2, bw(x) / 2);
+      c.fillStyle = '#ffc23a';
+      for (let x = 250; x < 1000; x += 3) ell(c, x, cy + bw(x) * 0.3, bw(x) * 0.16, bw(x) * 0.16);
+      for (let x = 270; x < 990; x += 36) { const b = bw(x); tri(c, x - 11, cy - b / 2 + 3, x + 11, cy - b / 2 + 3, x + 6, cy - b / 2 - 20 * b / 54); }
+      c.fillStyle = '#ff8c1a'; c.beginPath(); c.moveTo(1000, cy); c.lineTo(1070, cy - 45); c.lineTo(1045, cy); c.lineTo(1072, cy + 40); c.closePath(); c.fill();
+      for (const lx of [360, 500, 700, 840]) {
+        const b = bw(lx); c.strokeStyle = '#e8302a'; c.lineWidth = 10 * b / 54 + 4;
+        line(c, lx, cy + b * 0.3, lx + 16, cy + b / 2 + 32);
+        c.fillStyle = '#ffc23a'; for (const k of [-1, 0, 1]) ell(c, lx + 16 + k * 8, cy + b / 2 + 38, 4, 4);
+      }
+      c.fillStyle = '#ff8c1a';
+      for (let k = 0; k < 7; k++) { const a = -1.2 + k * 0.4; tri(c, 230 + 20 * Math.cos(a), cy + 30 * Math.sin(a), 255 + 75 * Math.cos(a), cy + 80 * Math.sin(a), 230 + 30 * Math.cos(a + 0.25), cy + 40 * Math.sin(a + 0.25)); }
+      c.fillStyle = '#e8302a'; ell(c, 200, cy - 6, 72, 46); ell(c, 135, cy + 6, 50, 28);
+      c.strokeStyle = '#ffc23a'; c.lineWidth = 9;
+      c.beginPath(); c.moveTo(215, cy - 40); c.quadraticCurveTo(250, cy - 90, 290, cy - 110); c.moveTo(190, cy - 44); c.quadraticCurveTo(205, cy - 95, 240, cy - 125); c.stroke();
+      c.lineWidth = 6;
+      c.beginPath(); c.moveTo(100, cy + 14); c.quadraticCurveTo(60, cy + 40, 70, cy + 95); c.moveTo(110, cy - 12); c.quadraticCurveTo(70, cy - 50, 95, cy - 100); c.stroke();
+      c.fillStyle = '#ffffff'; ell(c, 190, cy - 22, 13, 11);
+      hole(c, () => { ell(c, 186, cy - 22, 5, 6); c.lineWidth = 5; line(c, 92, cy + 16, 170, cy + 14); });
+      c.fillStyle = '#e8f4ff'; ell(c, 34, cy - 60, 24, 24);           // the pearl it chases
+    },
+    anim(x, y, t) {
+      if (x < -470) { AX = x + 8 * Math.cos(t * 1.3); AY = y + 14 * Math.sin(t * 2); AZ = 0; return; }
+      const amp = 16 + 46 * Math.min(1, Math.max(0, (x + 300) / 500)), ph = x * 0.011 - t * 2.6;
+      AX = x; AY = y + amp * Math.sin(ph); AZ = amp * 0.9 * Math.cos(ph);
+    } },
+  { name: 'Maple leaf', w: 520, h: 560,
+    draw(c, w, h) {
+      const R = [[0, 1], [0.08, 0.78], [0.2, 0.83], [0.15, 0.55], [0.42, 0.7], [0.4, 0.6], [0.62, 0.66], [0.52, 0.47], [0.6, 0.42], [0.3, 0.26], [0.36, 0.18], [0.05, 0.2]];
+      const pts = [...R, ...R.slice(1).reverse().map(([x, y]) => [-x, y])];
+      const X = v => w / 2 + v * 400, Y = v => h - 70 - v * 440;
+      c.fillStyle = '#ff2a2a'; c.beginPath(); pts.forEach(([x, y]) => c.lineTo(X(x), Y(y))); c.closePath(); c.fill();
+      c.fillRect(X(-0.025), Y(0.22), 20, 0.3 * 440);
+    },
+    anim(x, y, t) { turn(x, y + 8 * Math.sin(t * 1.4), 0.45 * Math.sin(t * 0.9)); } },
+  { name: 'Face', w: 440, h: 540,
+    draw(c) {
+      c.fillStyle = '#9a5530'; ell(c, 220, 205, 180, 165);
+      c.fillStyle = '#f4c7a1'; ell(c, 72, 295, 22, 38); ell(c, 368, 295, 22, 38); ell(c, 220, 295, 150, 195);
+      c.fillStyle = '#9a5530'; c.beginPath(); c.ellipse(220, 170, 155, 95, 0, Math.PI, 2 * Math.PI); c.fill();
+      c.strokeStyle = '#7a3f1e'; c.lineWidth = 9; line(c, 130, 218, 188, 208); line(c, 252, 208, 310, 218);
+      c.fillStyle = '#ffffff'; ell(c, 158, 252, 32, 17); ell(c, 282, 252, 32, 17);
+      c.fillStyle = '#3f8fe0'; ell(c, 158, 252, 12, 12); ell(c, 282, 252, 12, 12);
+      hole(c, () => { ell(c, 158, 252, 5, 5); ell(c, 282, 252, 5, 5); });
+      c.strokeStyle = '#d0906a'; c.lineWidth = 7; c.beginPath(); c.moveTo(222, 270); c.lineTo(206, 332); c.lineTo(230, 338); c.stroke();
+      c.fillStyle = '#f59a9a'; ell(c, 138, 335, 22, 15); ell(c, 302, 335, 22, 15);
+      c.strokeStyle = '#e0384a'; c.lineWidth = 12; c.beginPath(); c.arc(220, 350, 62, 0.18 * Math.PI, 0.82 * Math.PI); c.stroke();
+    },
+    anim(x, y, t) {
+      const ph = (t % 4) / 4, b = ph < 0.06 ? Math.sin(Math.PI * ph / 0.06) : 0;   // blink every 4 s
+      let yy = y;
+      if (b > 0 && Math.abs(y + 18) < 24 && Math.abs(Math.abs(x) - 62) < 40) yy = -18 + (y + 18) * (1 - 0.92 * b);
+      turn(x, yy, 0.3 * Math.sin(t * 0.7));
+    } },
+  { name: 'Butterfly', w: 640, h: 500,
+    draw(c, w) {
+      const half = () => {
+        c.fillStyle = '#2f8cff'; ell(c, 205, 185, 125, 88, -0.5);
+        c.fillStyle = '#8fdcff'; ell(c, 210, 190, 62, 40, -0.5);
+        c.fillStyle = '#ffffff'; ell(c, 115, 120, 12, 12); ell(c, 150, 92, 9, 9); ell(c, 95, 165, 8, 8);
+        c.fillStyle = '#ff8a1f'; ell(c, 232, 338, 88, 76, 0.4);
+        c.fillStyle = '#ffd23f'; ell(c, 232, 338, 40, 34, 0.4);
+      };
+      half(); c.save(); c.translate(w, 0); c.scale(-1, 1); half(); c.restore();
+      c.fillStyle = '#eeeeee'; ell(c, 320, 255, 11, 100); ell(c, 320, 148, 15, 15);
+      c.strokeStyle = '#eeeeee'; c.lineWidth = 5;
+      c.beginPath(); c.moveTo(314, 138); c.quadraticCurveTo(290, 90, 270, 70); c.moveTo(326, 138); c.quadraticCurveTo(350, 90, 370, 70); c.stroke();
+      ell(c, 270, 70, 6, 6); ell(c, 370, 70, 6, 6);
+    },
+    anim(x, y, t) {
+      const th = 1.15 * Math.pow(0.5 + 0.5 * Math.sin(t * 5), 1.5), ax = Math.abs(x);
+      if (ax > 14) { AX = Math.sign(x) * (14 + (ax - 14) * Math.cos(th)); AZ = (ax - 14) * Math.sin(th); } else { AX = x; AZ = 0; }
+      AY = y + 10 * Math.sin(t * 5 + 1); AX += 50 * Math.sin(t * 0.6);
+    } },
+  { name: 'Jack-o’-lantern', w: 520, h: 470,
+    draw(c) {
+      c.fillStyle = '#ff7a00'; ell(c, 175, 265, 110, 165); ell(c, 345, 265, 110, 165); ell(c, 260, 265, 175, 170);
+      c.strokeStyle = '#c85400'; c.lineWidth = 6;
+      c.beginPath(); c.ellipse(205, 265, 60, 165, 0, 0, 2 * Math.PI); c.stroke(); c.beginPath(); c.ellipse(315, 265, 60, 165, 0, 0, 2 * Math.PI); c.stroke();
+      c.fillStyle = '#3da33d'; c.save(); c.translate(262, 95); c.rotate(0.15); c.fillRect(-14, -40, 28, 48); c.restore();
+      c.fillStyle = '#ffd84a';
+      tri(c, 170, 225, 230, 225, 200, 165); tri(c, 290, 225, 350, 225, 320, 165); tri(c, 245, 275, 275, 275, 260, 248);
+      c.beginPath(); c.moveTo(150, 305);
+      for (const [x, y] of [[185, 325], [200, 305], [220, 330], [240, 310], [260, 332], [280, 310], [300, 330], [320, 305], [335, 325], [370, 305]]) c.lineTo(x, y);
+      c.quadraticCurveTo(260, 420, 150, 305); c.fill();
+    },
+    anim(x, y, t) { turn(x, y + 8 * Math.sin(t * 1.8), 0.35 * Math.sin(t * 0.6)); } },
+  { name: 'Diwali lamp', w: 520, h: 460,
+    draw(c) {
+      c.fillStyle = '#ff8c1a'; c.beginPath(); c.ellipse(260, 320, 190, 85, 0, 0, Math.PI); c.fill();
+      c.beginPath(); c.moveTo(420, 300); c.lineTo(490, 290); c.lineTo(430, 335); c.fill();
+      c.fillStyle = '#ffb347'; ell(c, 260, 320, 190, 24);
+      c.fillStyle = '#ff3b6b'; for (let k = 0; k < 9; k++) { const a = 0.25 + k * (Math.PI - 0.5) / 8; ell(c, 260 + 150 * Math.cos(a), 320 + 60 * Math.sin(a), 8, 8); }
+      c.fillStyle = '#ffb02e'; c.beginPath(); c.moveTo(260, 120); c.bezierCurveTo(305, 200, 300, 290, 260, 295); c.bezierCurveTo(220, 290, 215, 200, 260, 120); c.fill();
+      c.fillStyle = '#fff3b0'; c.beginPath(); c.moveTo(260, 190); c.bezierCurveTo(282, 240, 280, 285, 260, 288); c.bezierCurveTo(240, 285, 238, 240, 260, 190); c.fill();
+      const cols = ['#ff3b6b', '#ffd23f', '#3fd0ff', '#7be08a'];
+      for (let k = 0; k < 20; k++) { c.fillStyle = cols[k % 4]; ell(c, 60 + k * 21, 435, 7, 7); }
+    },
+    anim(x, y, t) {
+      AX = x; AY = y; AZ = 0;
+      if (y < 60) { const f = (60 - y) / 170; AX = x + 7 * f * Math.sin(t * 8 + y * 0.05); AY = y + 3 * f * Math.sin(t * 11); }
+    } },
+  { name: 'Menorah', w: 640, h: 520,
+    draw(c) {
+      c.strokeStyle = '#ffc23a'; c.lineWidth = 12;
+      for (let k = 1; k <= 4; k++) { c.beginPath(); c.arc(320, 250, 62 * k, 0, Math.PI); c.stroke(); }
+      c.fillStyle = '#ffc23a'; c.fillRect(310, 250, 20, 225); c.fillRect(230, 470, 180, 26);
+      for (let k = -4; k <= 4; k++) {
+        const x = 320 + 62 * k, top = k === 0 ? 140 : 180;
+        c.fillStyle = k === 0 ? '#ffffff' : '#6fa8ff'; c.fillRect(x - 8, top, 16, 250 - top);
+        c.fillStyle = '#ffb02e'; ell(c, x, top - 20, 9, 18); c.fillStyle = '#fff2a8'; ell(c, x, top - 15, 4, 8);
+        c.fillStyle = '#ffc23a'; c.fillRect(x - 14, 244, 28, 10);
+      }
+    },
+    anim(x, y, t) {
+      AX = x; AY = y; AZ = 0;
+      if (y < -78) { AX = x + 3 * Math.sin(t * 11 + x * 0.7); AY = y + 2 * Math.sin(t * 13 + x); }
+    } },
+  { name: 'Christmas tree', w: 480, h: 620,
+    draw(c) {
+      c.fillStyle = '#1fae4b';
+      tri(c, 240, 70, 110, 250, 370, 250); tri(c, 240, 170, 80, 390, 400, 390); tri(c, 240, 290, 50, 520, 430, 520);
+      c.fillStyle = '#b5652d'; c.fillRect(210, 520, 60, 60);
+      c.strokeStyle = '#fff6c8'; c.lineWidth = 5;
+      for (const [a, b, d] of [[120, 240, 290], [95, 375, 430], [70, 505, 570]]) { c.beginPath(); c.moveTo(a, b); c.quadraticCurveTo(240, d, 480 - a, b); c.stroke(); }
+      for (const [x, y, col] of [[200, 180, '#ff3b3b'], [275, 215, '#4aa3ff'], [170, 330, '#ffd23f'], [300, 300, '#ffffff'], [240, 355, '#ff3b3b'],
+        [130, 460, '#4aa3ff'], [220, 470, '#c77dff'], [330, 450, '#ffd23f'], [380, 500, '#ff3b3b'], [100, 505, '#ffffff']]) { c.fillStyle = col; ell(c, x, y, 13, 13); }
+      c.fillStyle = '#ffd700'; star(c, 240, 62, 46, 19);
+    },
+    anim(x, y, t) {
+      if (y < -205) { AX = x * Math.cos(t * 1.1); AY = y; AZ = x * Math.sin(t * 1.1); }   // the star spins
+      else { AX = x; AY = y; AZ = 0; }
+    } },
+  { name: 'Snowflake', w: 500, h: 500,
+    draw(c) {
+      c.strokeStyle = '#cfe9ff'; c.translate(250, 250);
+      for (let k = 0; k < 6; k++) {
+        c.save(); c.rotate(k * Math.PI / 3);
+        c.lineWidth = 14; line(c, 0, 0, 0, -225);
+        c.lineWidth = 10; for (const [r, l] of [[90, 62], [155, 46]]) { line(c, 0, -r, l * 0.7, -r - l * 0.7); line(c, 0, -r, -l * 0.7, -r - l * 0.7); }
+        c.restore();
+      }
+      c.fillStyle = '#ffffff'; star(c, 0, 0, 42, 42, 3, 0);
+      c.setTransform(1, 0, 0, 1, 0, 0);
+    },
+    anim(x, y, t) { const a = t * 0.3, ca = Math.cos(a), sa = Math.sin(a); AX = x * ca - y * sa; AY = x * sa + y * ca; AZ = 0; } },
+  { name: 'Crescent and star', w: 560, h: 480,
+    draw(c) {
+      c.fillStyle = '#ffd54a'; ell(c, 230, 240, 195, 195);
+      hole(c, () => ell(c, 300, 200, 170, 170));
+      c.fillStyle = '#fff0a0'; star(c, 420, 215, 72, 29);
+    },
+    anim(x, y, t) {
+      const sx = 140, sy = -25;
+      if (x > 60 && Math.hypot(x - sx, y - sy) < 80) {
+        const a = 0.5 * Math.sin(t * 1.5), dx = x - sx, dy = y - sy;
+        AX = sx + dx * Math.cos(a) - dy * Math.sin(a); AY = sy + dx * Math.sin(a) + dy * Math.cos(a); AZ = 0;
+      } else turn(x, y, 0.3 * Math.sin(t * 0.5));
+    } },
+  { name: 'Beating heart', w: 500, h: 460,
+    draw(c) {
+      c.fillStyle = '#ff2d55'; c.beginPath();
+      for (let k = 0; k <= 200; k++) {
+        const t = k / 200 * 2 * Math.PI, x = 16 * Math.sin(t) ** 3, y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+        c.lineTo(250 + x * 13, 215 - y * 13);
+      }
+      c.fill();
+      c.fillStyle = '#ff8fa6'; ell(c, 175, 150, 30, 18, -0.6);
+      c.strokeStyle = '#ffd23f'; c.lineWidth = 8; line(c, 40, 400, 430, 102);
+      c.fillStyle = '#ffd23f'; tri(c, 462, 78, 412, 92, 444, 126);
+      c.lineWidth = 5; for (const k of [0, 18, 36]) { line(c, 40 + k, 400 - k * 0.76, 30 + k, 380 - k * 0.76); line(c, 40 + k, 400 - k * 0.76, 58 + k, 408 - k * 0.76); }
+    },
+    anim(x, y, t) {
+      const m = t % 1.2, s = 1 + 0.09 * Math.exp(-(((m - 0.1) / 0.06) ** 2)) + 0.06 * Math.exp(-(((m - 0.32) / 0.06) ** 2));
+      AX = x * s; AY = y * s; AZ = 0;
+    } },
+  { name: 'Fireworks 2027', w: 760, h: 560,
+    draw(c) {
+      for (const [x, y, r, col] of FIREWORKS) {
+        c.strokeStyle = col; c.lineWidth = 6;
+        for (let k = 0; k < 20; k++) { const a = k / 20 * 2 * Math.PI; line(c, x + r * 0.3 * Math.cos(a), y + r * 0.3 * Math.sin(a), x + r * Math.cos(a), y + r * Math.sin(a)); }
+        c.fillStyle = '#ffffff'; ell(c, x, y, 8, 8);
+      }
+      c.fillStyle = '#ffe9a8'; c.font = '900 150px system-ui, sans-serif'; c.textAlign = 'center'; c.fillText('2027', 380, 520);
+    },
+    anim(x, y, t) {
+      AX = x; AY = y; AZ = 0;
+      if (y > 60) return;                              // the "2027" stays put
+      let best = 0, bd = Infinity;
+      FIREWORKS.forEach(([fx, fy], k) => { const d = Math.hypot(x - (fx - 380), y - (fy - 280)); if (d < bd) { bd = d; best = k; } });
+      const cx = FIREWORKS[best][0] - 380, cy = FIREWORKS[best][1] - 280;
+      const p = (t * 0.45 + best * 0.33) % 1, s = 0.15 + 0.85 * Math.sin(Math.PI * p);
+      AX = cx + (x - cx) * s; AY = cy + (y - cy) * s + 30 * p * p; AZ = (x - cx) * 0.4 * s;
+    } },
+  { name: 'Spiral galaxy', w: 560, h: 560,
+    draw(c) {
+      const r = mulberry(7), g = () => Math.sqrt(-2 * Math.log(r() + 1e-9)) * Math.cos(2 * Math.PI * r());
+      for (let k = 0; k < 500; k++) { c.fillStyle = '#fff4d6'; ell(c, 280 + g() * 30, 280 + g() * 30, 3, 3); }
+      for (let k = 0; k < 2600; k++) {
+        const rad = 25 + Math.pow(r(), 0.8) * 240, th = (k % 2) * Math.PI + Math.log(rad / 25) * 2.1 + g() * 0.28;
+        c.fillStyle = rad < 90 ? '#ffe2a8' : r() < 0.12 ? '#ff7ad9' : '#7fb0ff';
+        ell(c, 280 + rad * Math.cos(th), 280 + rad * Math.sin(th), 3.2, 3.2);
+      }
+    },
+    anim(x, y, t) {
+      const r = Math.hypot(x, y), a = Math.atan2(y, x) + t * 0.25 * (1 + 60 / (r + 60));
+      AX = r * Math.cos(a); const ry = r * Math.sin(a);
+      if (is3D) { AY = ry * 0.6; AZ = ry * 0.8; } else { AY = ry; AZ = 0; }
+    } },
+];
+const FIREWORKS = [[190, 170, 110, '#ff4d6d'], [400, 125, 130, '#4dd2ff'], [600, 190, 100, '#ffd84d']];
+
+function textShape(str) {
+  const words = str.trim().toUpperCase().split(/\s+/), lines = [];
+  for (const wd of words) { if (lines.length && (lines[lines.length - 1] + ' ' + wd).length <= 12) lines[lines.length - 1] += ' ' + wd; else lines.push(wd); }
+  const fs = 170, m = document.createElement('canvas').getContext('2d');
+  m.font = `900 ${fs}px system-ui, sans-serif`;
+  const w = Math.ceil(Math.max(...lines.map(l => m.measureText(l).width))) + 40, h = Math.ceil(lines.length * fs * 1.05 + 40);
+  return { name: `Text: ${str.trim()}`, custom: 'text', w, h,
+    draw(c) {
+      const gr = c.createLinearGradient(0, 0, w, 0);
+      ['#ff4d6d', '#ffb02e', '#ffe14d', '#5be37d', '#4dd2ff', '#9b7bff'].forEach((col, k, a) => gr.addColorStop(k / (a.length - 1), col));
+      c.fillStyle = gr; c.font = `900 ${fs}px system-ui, sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle';
+      lines.forEach((l, k) => c.fillText(l, w / 2, 20 + fs * 1.05 * (k + 0.5)));
+    },
+    anim(x, y, t) { AX = x; AY = y + 5 * Math.sin(x * 0.012 - t * 1.6); AZ = 10 * Math.cos(x * 0.012 - t * 1.6); } };
+}
+function imageShape(img, name) {
+  const k = Math.min(1, 640 / Math.max(img.width, img.height));
+  const w = Math.max(1, Math.round(img.width * k)), h = Math.max(1, Math.round(img.height * k));
+  return { name: `Image: ${name}`, custom: 'image', w, h, stipple: true,
+    draw(c) { c.drawImage(img, 0, 0, w, h); },
+    anim(x, y, t) { turn(x, y, 0.25 * Math.sin(t * 0.6)); } };
+}
+
+// spread a shape into n target points (shape-centred coordinates) with LED colours
+function sampleShape(shape, n) {
+  const w = shape.w, h = shape.h;
+  const off = document.createElement('canvas'); off.width = w; off.height = h;
+  const c = off.getContext('2d', { willReadFrequently: true });
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  shape.draw(c, w, h);
+  const data = c.getImageData(0, 0, w, h).data;
+  const at = (x, y) => ((y | 0) * w + (x | 0)) * 4;
+  let pts = [];
+  if (shape.stipple) {
+    // photo: candidates on a fine hex grid, kept with probability ∝ brightness^1.5, tuned to give n
+    const s0 = Math.sqrt(w * h / (n * 5) / 0.866), rr = mulberry(11), cand = [];
+    for (let row = 0, y = s0 / 2; y < h; row++, y += s0 * 0.866) for (let x = (row % 2 ? s0 : s0 / 2); x < w; x += s0) {
+      const o = at(x, y); if (data[o + 3] < 128) continue;
+      cand.push(x, y, Math.pow((0.3 * data[o] + 0.59 * data[o + 1] + 0.11 * data[o + 2]) / 255, 1.5), rr());
+    }
+    let lo = 0, hi = 64;
+    for (let it = 0; it < 32; it++) {
+      const f = (lo + hi) / 2; let cnt = 0;
+      for (let q = 0; q < cand.length; q += 4) if (cand[q + 3] < f * cand[q + 2]) cnt++;
+      if (cnt < n) lo = f; else hi = f;
+    }
+    for (let q = 0; q < cand.length; q += 4) if (cand[q + 3] < hi * cand[q + 2]) pts.push(cand[q], cand[q + 1]);
+  } else {
+    let filled = 0; for (let k = 3; k < data.length; k += 4) if (data[k] > 128) filled++;
+    // bisect the hex-grid spacing for the widest grid that still gives ≥ n points, so few are dropped
+    const grid = s => { const out = []; for (let row = 0, y = s / 2; y < h; row++, y += s * 0.866) for (let x = (row % 2 ? s : s / 2); x < w; x += s) if (data[at(x, y) + 3] > 128) out.push(x, y); return out; };
+    const s0 = Math.sqrt(filled / Math.max(1, n) / 0.866);
+    let lo = s0 * 0.5, hi = s0 * 1.5;
+    for (let it = 0; it < 24; it++) { const mid = (lo + hi) / 2; if (grid(mid).length / 2 >= n) lo = mid; else hi = mid; }
+    pts = grid(lo);
+  }
+  const m = pts.length / 2, rr = mulberry(5), idx = Array.from({ length: m }, (_, k) => k);
+  for (let k = m - 1; k > 0; k--) { const j = (rr() * (k + 1)) | 0; const t = idx[k]; idx[k] = idx[j]; idx[j] = t; }
+  const X = new Float32Array(n), Y = new Float32Array(n), C = new Uint16Array(n), palette = [], pmap = new Map();
+  for (let k = 0; k < n; k++) {
+    const q = m ? idx[k % m] : 0, x = m ? pts[2 * q] : w / 2, y = m ? pts[2 * q + 1] : h / 2;
+    const jit = k >= m ? 3 : 0;   // more boids than points: double up with a little jitter
+    X[k] = x - w / 2 + (rr() - 0.5) * jit; Y[k] = y - h / 2 + (rr() - 0.5) * jit;
+    const o = at(x, y);
+    let r = data[o], g = data[o + 1], b = data[o + 2];
+    const f = Math.min(2.5, 255 / Math.max(r, g, b, 1)); r = Math.min(255, r * f) | 0; g = Math.min(255, g * f) | 0; b = Math.min(255, b * f) | 0;  // LEDs at full brightness
+    const key = (r >> 4) << 8 | (g >> 4) << 4 | (b >> 4);
+    if (!pmap.has(key)) { pmap.set(key, palette.length); palette.push(`rgb(${r},${g},${b})`); }
+    C[k] = pmap.get(key);
+  }
+  return { X, Y, C, palette };
+}
+
+const show = { on: false, idx: 0, t: 0, list: SHAPES.slice(), cur: SHAPES[0], palette: ['#fff'],
+  bx: new Float32Array(MAX), by: new Float32Array(MAX), col: new Uint16Array(MAX),
+  tx: new Float32Array(MAX), ty: new Float32Array(MAX), tz: new Float32Array(MAX) };
+
+function showFrame() {   // [centre x, y, z, world units per shape pixel]
+  const sh = show.cur;
+  if (is3D) return [WX / 2, WY / 2, WZ / 2, Math.min(WX * 1.7 / sh.w, WY * 1.6 / sh.h)];   // shows may extend past the box
+  const availW = (!panel.classList.contains('hidden') && W > 760) ? W - 306 : W;
+  return [availW / 2, H / 2, 0, Math.min(availW * 0.86 / sh.w, H * 0.8 / sh.h)];
+}
+function shapeTarget(bx, by, t) { if (show.cur.anim) show.cur.anim(bx, by, t); else { AX = bx; AY = by; AZ = 0; } }
+function updateShowTargets() {
+  const [cx, cy, cz, k] = showFrame();
+  for (let i = 0; i < N; i++) {
+    shapeTarget(show.bx[i], show.by[i], show.t);
+    show.tx[i] = cx + AX * k; show.ty[i] = cy + AY * k; show.tz[i] = is3D ? cz + AZ * k : 0;
+  }
+}
+function hilbert(x, y) {   // position along a Hilbert curve on a 1024² grid: nearby points get nearby numbers
+  let d = 0;
+  for (let s = 512; s > 0; s >>= 1) {
+    const rx = (x & s) > 0 ? 1 : 0, ry = (y & s) > 0 ? 1 : 0;
+    d += s * s * ((3 * rx) ^ ry);
+    if (ry === 0) { if (rx === 1) { x = 1023 - x; y = 1023 - y; } const t = x; x = y; y = t; }
+  }
+  return d;
+}
+// pair boids with targets by walking both along a Hilbert curve, so each boid flies to a nearby target
+function assignShow() {
+  const smp = sampleShape(show.cur, N);
+  show.palette = smp.palette;
+  const [cx, cy, , k] = showFrame();
+  const hv = (x, y) => hilbert(clamp((x / Math.max(WX, 1) * 1023) | 0, 0, 1023), clamp((y / Math.max(WY, 1) * 1023) | 0, 0, 1023));
+  const tk = new Float64Array(N), bk = new Float64Array(N);
+  for (let j = 0; j < N; j++) { shapeTarget(smp.X[j], smp.Y[j], 0); tk[j] = hv(cx + AX * k, cy + AY * k); bk[j] = hv(px[j], py[j]); }
+  const to = Array.from({ length: N }, (_, j) => j).sort((a, b) => tk[a] - tk[b]);
+  const bo = Array.from({ length: N }, (_, j) => j).sort((a, b) => bk[a] - bk[b]);
+  for (let j = 0; j < N; j++) { const b = bo[j], t = to[j]; show.bx[b] = smp.X[t]; show.by[b] = smp.Y[t]; show.col[b] = smp.C[t]; }
+  show.t = 0;
+}
+function startShow(idx) {
+  if (hunterMode !== 'none') setHunterMode('none');
+  focus = -1;
+  if (N < 1000) { P.count = 1500; syncUI(); setCount(1500); }
+  show.idx = clamp(idx | 0, 0, show.list.length - 1); show.cur = show.list[show.idx];
+  show.on = true;
+  assignShow();
+  refreshShowUI();
+}
+function stopShow() { show.on = false; refreshShowUI(); }
+function nextShape() { show.idx = (show.idx + 1) % show.list.length; show.cur = show.list[show.idx]; assignShow(); refreshShowUI(); }
+function advanceShow() { show.t += 1 / 60; if ($('showAuto').checked && show.t > P.hold) nextShape(); }
+
+function drawShow() {
+  const pal = show.palette, np = pal.length, cnt = new Int32Array(np + 1);
+  for (let i = 0; i < N; i++) cnt[show.col[i] + 1]++;
+  for (let k = 0; k < np; k++) cnt[k + 1] += cnt[k];
+  const fillp = cnt.slice(0, np);
+  for (let i = 0; i < N; i++) order[fillp[show.col[i]]++] = i;
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  const base = (is3D ? 2.4 : 2.0) * P.size;
+  for (const [mult, alpha] of [[3.2, 0.13], [1, 1]]) {      // soft glow, then the bright LED
+    ctx.globalAlpha = alpha;
+    for (let p = 0; p < np; p++) {
+      const lo = cnt[p], hi = cnt[p + 1]; if (lo === hi) continue;
+      ctx.beginPath();
+      for (let k = lo; k < hi; k++) { const i = order[k]; project(px[i], py[i], pz[i]); const r = base * mult * PS; ctx.moveTo(PX + r, PY); ctx.arc(PX, PY, r, 0, Math.PI * 2); }
+      ctx.fillStyle = pal[p]; ctx.fill();
+    }
+  }
+  ctx.restore();
+  ctx.fillStyle = 'rgba(216,220,230,0.5)'; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(show.cur.name, is3D ? scx : showFrame()[0], H - 22); ctx.textAlign = 'start';
+}
+
+const shapeSel = $('showShape');
+function refreshShowUI() {
+  shapeSel.innerHTML = '';
+  show.list.forEach((s, k) => { const o = document.createElement('option'); o.value = k; o.textContent = s.name; shapeSel.appendChild(o); });
+  shapeSel.value = show.idx;
+  $('showBtn').textContent = show.on ? '■ Stop show' : '▶ Start drone show';
+  $('showBtn').classList.toggle('on', show.on);
+}
+function setCustom(sh) {
+  const k = show.list.findIndex(s => s.custom === sh.custom);
+  if (k >= 0) show.list[k] = sh; else show.list.push(sh);
+  startShow(show.list.indexOf(sh));
+}
+shapeSel.onchange = () => startShow(+shapeSel.value);
+$('showBtn').onclick = () => show.on ? stopShow() : startShow(show.idx);
+$('showNext').onclick = () => show.on ? nextShape() : startShow((show.idx + 1) % show.list.length);
+$('showTextBtn').onclick = () => setCustom(textShape($('showText').value.trim() || 'HELLO'));
+$('showText').addEventListener('keydown', e => { if (e.key === 'Enter') $('showTextBtn').click(); });
+$('showImg').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const url = URL.createObjectURL(f), img = new Image();
+  img.onload = () => { setCustom(imageShape(img, f.name)); URL.revokeObjectURL(url); };
+  img.onerror = () => { $('showImgNote').textContent = 'Could not read that image.'; };
+  img.src = url;
+};
 
 // ---------- rendering ----------
 // Boids are bucketed by (depth band, colour) so each bucket is one path and one fill;
@@ -404,7 +1323,7 @@ function bucketColors() {
   for (let band = 0; band < BANDS; band++) {
     const near = band / (BANDS - 1);          // 1 = nearest; 2D uses the nearest band only
     for (let b = 0; b < BUCKETS; b++) {
-      if (P.color === 'heading') bucketColor.push(`hsl(${(b / BUCKETS * 360) | 0},${50 + 22 * near | 0}%,${26 + 38 * near | 0}%)`);
+      if (P.color === 'heading' || P.color === 'genes') bucketColor.push(`hsl(${(b / BUCKETS * 360) | 0},${50 + 22 * near | 0}%,${26 + 38 * near | 0}%)`);
       else if (P.color === 'density') { const t = b / (BUCKETS - 1); bucketColor.push(`hsl(${(220 - 200 * t) | 0},${60 + 25 * t | 0}%,${(45 + 25 * t) * (0.45 + 0.55 * near) | 0}%)`); }
       else bucketColor.push(`hsl(220,18%,${30 + 54 * near | 0}%)`);
     }
@@ -414,6 +1333,13 @@ function bandOf(depth, zNear, zFar) {
   if (!is3D) return BANDS - 1;
   const t = (zFar - depth) / (zFar - zNear);
   return t <= 0 ? 0 : t >= 1 ? BANDS - 1 : Math.floor(t * BANDS);
+}
+// hue (0..1) of the colour (r, g, b) = (separation, alignment, cohesion) genes
+function geneHue(i) {
+  const r = gS[i], g = gA[i], b = gC[i], mx = Math.max(r, g, b), mn = Math.min(r, g, b), c = mx - mn;
+  if (c < 1e-6) return 0.6;
+  let h = mx === r ? ((g - b) / c) % 6 : mx === g ? (b - r) / c + 2 : (r - g) / c + 4;
+  return ((h / 6) + 1) % 1;
 }
 
 const CORNERS = [];
@@ -441,6 +1367,40 @@ function drawObstacle(ob) {
   }
 }
 
+// add one arrowhead-shaped body to the current path
+function pathBody(x, y, z, hx, hy, hz, s) {
+  project(x, y, z); const cxs = PX, cys = PY, k0 = PS;
+  project(x + hx * s * 1.8, y + hy * s * 1.8, z + hz * s * 1.8); let tx = PX, ty = PY;
+  project(x - hx * s, y - hy * s, z - hz * s); let bx = PX, by = PY;
+  // screen-space body axis; keep a minimum length when it points at the camera
+  let axx = tx - bx, ayy = ty - by, la = Math.hypot(axx, ayy);
+  const minL = 1.4 * s * k0;
+  if (la < minL) {
+    if (la < 1e-6) { axx = 0; ayy = -1; la = 1; }
+    const f = minL / la; axx *= f; ayy *= f;
+    tx = cxs + axx * (1.8 / 2.8); ty = cys + ayy * (1.8 / 2.8);
+    bx = cxs - axx * (1 / 2.8); by = cys - ayy * (1 / 2.8);
+    la = minL;
+  }
+  const nx = -ayy / la, ny = axx / la, w = 0.85 * s * k0;
+  ctx.moveTo(tx, ty);
+  ctx.lineTo(bx + nx * w, by + ny * w);
+  ctx.lineTo(cxs + (bx - cxs) * 0.45, cys + (by - cys) * 0.45);
+  ctx.lineTo(bx - nx * w, by - ny * w);
+  ctx.closePath();
+}
+
+function drawPen() {
+  const pen = herd.pen;
+  project(pen.x, pen.y, pen.z);
+  ctx.beginPath(); ctx.arc(PX, PY, pen.r * PS, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(123,224,138,0.06)'; ctx.fill();
+  ctx.setLineDash([6, 5]); ctx.strokeStyle = 'rgba(123,224,138,0.55)'; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = '#c9e9cf'; ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(`pen ${herd.penned}/${N}  ·  ${(herd.steps / 60).toFixed(0)} s`, PX, PY + 4);
+  ctx.textAlign = 'start';
+}
+
 function draw() {
   updateCamera();
   if (P.trails) { ctx.fillStyle = 'rgba(11,13,18,0.16)'; ctx.fillRect(0, 0, W, H); }
@@ -448,8 +1408,10 @@ function draw() {
 
   const R = 0.5 * Math.hypot(WX, WY, WZ);
   const zNear = cam.dist - R, zFar = cam.dist + R;
-  if (is3D) drawBox();
+  if (is3D && !show.on) drawBox();
+  if (hunterMode === 'dogs') drawPen();
 
+  if (show.on) drawShow(); else {
   // bucket boids
   bucketCount.fill(0);
   let maxN = 1;
@@ -459,7 +1421,8 @@ function draw() {
     if (P.color === 'heading') {
       const a = is3D ? Math.atan2(vz[i], vx[i]) : Math.atan2(vy[i], vx[i]);
       b = Math.floor((a / (Math.PI * 2) + 1) * BUCKETS) % BUCKETS;
-    } else if (P.color === 'density') b = Math.min(BUCKETS - 1, Math.floor(Math.sqrt(nbr[i] / maxN) * BUCKETS));
+    } else if (P.color === 'genes') b = Math.floor(geneHue(i) * BUCKETS) % BUCKETS;
+    else if (P.color === 'density') b = Math.min(BUCKETS - 1, Math.floor(Math.sqrt(nbr[i] / maxN) * BUCKETS));
     let band = BANDS - 1;
     if (is3D) { project(px[i], py[i], pz[i]); band = bandOf(PZ, zNear, zFar); }
     const key = band * BUCKETS + b;
@@ -470,6 +1433,8 @@ function draw() {
   for (let i = 0; i < N; i++) order[fill[bucketOf[i]]++] = i;
 
   const obBand = obstacles.map(ob => { project(ob.x, ob.y, ob.z); return bandOf(PZ, zNear, zFar); });
+  const hunters = hunterList();
+  const hBand = hunters.map(o => { project(o.x, o.y, o.z); return bandOf(PZ, zNear, zFar); });
 
   const s = (is3D ? 5.5 : 4.2) * P.size;
   for (let band = 0; band < BANDS; band++) {
@@ -480,34 +1445,26 @@ function draw() {
       ctx.beginPath();
       for (let k = lo; k < hi; k++) {
         const i = order[k];
-        const sp = Math.hypot(vx[i], vy[i], vz[i]) || 1, hx = vx[i] / sp, hy = vy[i] / sp, hz = vz[i] / sp;
-        const x = px[i], y = py[i], z = pz[i];
-        project(x, y, z); const cxs = PX, cys = PY, k0 = PS;
-        project(x + hx * s * 1.8, y + hy * s * 1.8, z + hz * s * 1.8); let tx = PX, ty = PY;
-        project(x - hx * s, y - hy * s, z - hz * s); let bx = PX, by = PY;
-        // screen-space body axis; keep a minimum length when the boid points at the camera
-        let axx = tx - bx, ayy = ty - by, la = Math.hypot(axx, ayy);
-        const minL = 1.4 * s * k0;
-        if (la < minL) {
-          if (la < 1e-6) { axx = 0; ayy = -1; la = 1; }
-          const f = minL / la; axx *= f / 1; ayy *= f;
-          tx = cxs + axx * (1.8 / 2.8); ty = cys + ayy * (1.8 / 2.8);
-          bx = cxs - axx * (1 / 2.8); by = cys - ayy * (1 / 2.8);
-          la = minL;
-        }
-        const nx = -ayy / la, ny = axx / la, w = 0.85 * s * k0;
-        ctx.moveTo(tx, ty);
-        ctx.lineTo(bx + nx * w, by + ny * w);
-        ctx.lineTo(cxs + (bx - cxs) * 0.45, cys + (by - cys) * 0.45);
-        ctx.lineTo(bx - nx * w, by - ny * w);
-        ctx.closePath();
+        const sp = Math.hypot(vx[i], vy[i], vz[i]) || 1;
+        pathBody(px[i], py[i], pz[i], vx[i] / sp, vy[i] / sp, vz[i] / sp, s);
       }
       ctx.fillStyle = bucketColor[key];
       ctx.fill();
     }
+    // hunters in this depth band, drawn larger with a dark outline
+    for (let h = 0; h < hunters.length; h++) {
+      if (hBand[h] !== band) continue;
+      const o = hunters[h], sp = Math.hypot(o.vx, o.vy, o.vz) || 1;
+      ctx.beginPath();
+      pathBody(o.x, o.y, o.z, o.vx / sp, o.vy / sp, o.vz / sp, s * 2.3);
+      ctx.fillStyle = hunterMode === 'dogs' ? '#f1ede0' : (o.digest > 0 ? '#9a4640' : '#ff5a4f');
+      ctx.fill(); ctx.strokeStyle = '#0b0d12'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
   }
 
-  if (focus >= 0 && focus < N) drawFocus();
+  }
+
+  if (focus >= 0 && focus < N && !show.on) drawFocus();
 
   if (pointer.inside && (mode === 'predator' || mode === 'attract')) {
     const pr = PRED_R * (is3D ? focal / cam.dist : 1);
@@ -520,15 +1477,6 @@ function draw() {
       ctx.fillStyle = pointer.down ? '#9dffb0' : '#7be08a'; ctx.fill();
     }
   }
-}
-
-function wrapDelta(dx, dy, dz) {
-  if (P.edges === 'wrap') {
-    if (dx > WX / 2) dx -= WX; else if (dx < -WX / 2) dx += WX;
-    if (dy > WY / 2) dy -= WY; else if (dy < -WY / 2) dy += WY;
-    if (is3D) { if (dz > WZ / 2) dz -= WZ; else if (dz < -WZ / 2) dz += WZ; }
-  }
-  return [dx, dy, dz];
 }
 
 function drawFocus() {
@@ -549,8 +1497,8 @@ function drawFocus() {
   if (focusDebug) {
     ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.beginPath();
     for (const j of focusDebug.seen) {
-      const [dx, dy, dz] = wrapDelta(px[j] - x, py[j] - y, pz[j] - z);
-      project(x + dx, y + dy, z + dz);
+      delta(x, y, z, px[j], py[j], pz[j]);
+      project(x + dx_, y + dy_, z + dz_);
       ctx.moveTo(cx, cy); ctx.lineTo(PX, PY);
     }
     ctx.stroke();
@@ -569,40 +1517,191 @@ function drawFocus() {
   }
   ctx.beginPath(); ctx.arc(cx, cy, (4 * P.size + 4) * (is3D ? Math.max(0.7, k) : 1), 0, Math.PI * 2);
   ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+  if (evolvingBoids()) {
+    ctx.fillStyle = '#d8dce6'; ctx.font = '11px system-ui, sans-serif';
+    const t = geneSum;
+    ctx.fillText(`sep ${(gS[i] / t).toFixed(2)} · align ${(gA[i] / t).toFixed(2)} · cohere ${(gC[i] / t).toFixed(2)} · flee ${(gF[i] / t).toFixed(2)} · age ${(age[i] / 60).toFixed(0)} s`, cx + 12, cy - 12);
+  }
   ctx.restore();
+}
+
+// ---------- charts (evolution / learning history) ----------
+// palette: first four slots of the validated dark categorical palette, fixed order
+const SERIES = { sep: '#3987e5', ali: '#d95926', coh: '#199e70', flee: '#c98500' };
+const SERIES_LABEL = { sep: 'separation', ali: 'alignment', coh: 'cohesion', flee: 'flee' };
+const chartHover = { chart1: null, chart2: null };
+
+function chartSetup(cv) {
+  const w = cv.clientWidth, h = cv.clientHeight, r = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(w * r) || cv.height !== Math.round(h * r)) { cv.width = Math.round(w * r); cv.height = Math.round(h * r); }
+  const c = cv.getContext('2d'); c.setTransform(r, 0, 0, r, 0, 0); c.clearRect(0, 0, w, h);
+  return { c, w, h };
+}
+// one y-axis line chart; series = [{key, color, values}], xs ascending
+function lineChart(id, xs, series, yMax, fmtY, opts = {}) {
+  const cv = $(id); const { c, w, h } = chartSetup(cv);
+  const L = 30, Rm = opts.labels ? 64 : 8, T = 6, B = 16;
+  const pw = w - L - Rm, ph = h - T - B;
+  const x0 = xs[0] ?? 0, x1 = Math.max(xs[xs.length - 1] ?? 1, x0 + 1e-6);
+  const X = v => L + (v - x0) / (x1 - x0) * pw, Y = v => T + ph - Math.min(v, yMax) / yMax * ph;
+  c.font = '10px system-ui, sans-serif'; c.fillStyle = '#8a91a3'; c.strokeStyle = 'rgba(138,145,163,0.18)'; c.lineWidth = 1;
+  for (const f of [0, 0.5, 1]) {
+    const y = Math.round(Y(yMax * f)) + 0.5;
+    c.beginPath(); c.moveTo(L, y); c.lineTo(L + pw, y); c.stroke();
+    c.textAlign = 'right'; c.fillText(fmtY(yMax * f), L - 4, y + 3);
+  }
+  c.textAlign = 'left'; c.fillText(opts.xLabel ? opts.xLabel(x0) : '', L, h - 3);
+  c.textAlign = 'right'; c.fillText(opts.xLabel ? opts.xLabel(x1) : '', L + pw, h - 3);
+  if (!xs.length) { c.textAlign = 'center'; c.fillText(opts.empty || 'collecting data…', L + pw / 2, T + ph / 2); return; }
+  for (const s of series) {
+    c.strokeStyle = s.color; c.fillStyle = s.color; c.lineWidth = 2; c.lineJoin = 'round';
+    if (s.dots) {
+      s.values.forEach((v, k) => {
+        if (v == null) return;
+        c.beginPath(); c.arc(X(xs[k]), Y(v), 3, 0, Math.PI * 2);
+        if (s.hollow && s.hollow[k]) { c.lineWidth = 1.5; c.stroke(); } else c.fill();
+      });
+    } else {
+      c.beginPath(); let started = false;
+      s.values.forEach((v, k) => { if (v == null) return; const xx = X(xs[k]), yy = Y(v); if (!started) { c.moveTo(xx, yy); started = true; } else c.lineTo(xx, yy); });
+      c.stroke();
+    }
+  }
+  // direct labels at the line ends, nudged apart so they don't collide
+  if (opts.labels) {
+    const ends = series.map(s => ({ s, y: Y(s.values[s.values.length - 1] ?? 0) })).sort((a, b) => a.y - b.y);
+    for (let k = 1; k < ends.length; k++) if (ends[k].y - ends[k - 1].y < 11) ends[k].y = ends[k - 1].y + 11;
+    c.textAlign = 'left';
+    for (const e of ends) {
+      c.fillStyle = e.s.color; c.fillRect(L + pw + 4, e.y - 1, 6, 2);
+      c.fillStyle = '#c3c2b7'; c.fillText(SERIES_LABEL[e.s.key] || e.s.key, L + pw + 13, e.y + 3);
+    }
+  }
+  // hover crosshair
+  const hv = chartHover[id];
+  if (hv != null) {
+    let k = 0, bd = Infinity;
+    xs.forEach((v, j) => { const d = Math.abs(X(v) - hv); if (d < bd) { bd = d; k = j; } });
+    const xx = Math.round(X(xs[k])) + 0.5;
+    c.strokeStyle = 'rgba(216,220,230,0.45)'; c.lineWidth = 1; c.beginPath(); c.moveTo(xx, T); c.lineTo(xx, T + ph); c.stroke();
+    for (const s of series) { const v = s.values[k]; if (v == null) continue; c.fillStyle = s.color; c.beginPath(); c.arc(xx, Y(v), 3.5, 0, Math.PI * 2); c.fill(); c.strokeStyle = '#12151d'; c.lineWidth = 2; c.stroke(); }
+    return k;
+  }
+  return null;
+}
+for (const id of ['chart1', 'chart2']) {
+  const cv = $(id);
+  cv.addEventListener('pointermove', e => { chartHover[id] = e.clientX - cv.getBoundingClientRect().left; drawCharts(); });
+  cv.addEventListener('pointerleave', () => { chartHover[id] = null; drawCharts(); });
+}
+function legend(id, items) { $(id).innerHTML = items.map(([c, t]) => `<span><i style="background:${c}"></i>${t}</span>`).join(''); }
+
+function drawCharts() {
+  if (hunterMode === 'predators') {
+    const h = evo.hist, xs = h.map(r => r.t), tl = v => `${v.toFixed(1)} min`;
+    $('c1title').textContent = evolvingBoids() ? 'Boid genes — share of steering budget' : 'Boid genes (evolution off)';
+    legend('c1legend', Object.keys(SERIES).map(k => [SERIES[k], SERIES_LABEL[k]]));
+    const s1 = Object.keys(SERIES).map(k => ({ key: k, color: SERIES[k], values: h.map(r => r[k]) }));
+    const yMax1 = Math.max(0.6, ...h.flatMap(r => [r.sep, r.ali, r.coh, r.flee])) * 1.05;
+    const k1 = lineChart('chart1', xs, s1, yMax1, v => v.toFixed(2), { labels: true, xLabel: tl });
+    $('tip1').textContent = k1 != null ? `${tl(xs[k1])}: ` + Object.keys(SERIES).map(k => `${SERIES_LABEL[k]} ${h[k1][k].toFixed(2)}`).join(' · ') : 'Hover the chart for values.';
+    $('c2title').textContent = 'Kills per simulated minute';
+    legend('c2legend', []);
+    const yMax2 = Math.max(5, ...h.map(r => r.kpm)) * 1.1;
+    const k2 = lineChart('chart2', xs, [{ key: 'kills', color: '#3987e5', values: h.map(r => r.kpm) }], yMax2, v => v.toFixed(0), { xLabel: tl });
+    $('tip2').textContent = k2 != null ? `${tl(xs[k2])}: ${h[k2].kpm.toFixed(1)} kills/min · polarisation ${h[k2].pol.toFixed(2)}` : '';
+  } else if (hunterMode === 'dogs') {
+    const h = herd.hist, xs = h.map(r => r.round);
+    $('c1title').textContent = 'Seconds to pen 90% of the flock, by round';
+    legend('c1legend', [['#3987e5', 'current best herding'], ['#d95926', 'tried tweak'], ['#8a91a3', 'hollow = timed out']]);
+    const lim = ROUND_LIMIT / 60;
+    const vals = which => h.map(r => r.which === which ? (r.ok ? r.secs : lim) : null);
+    const hollow = h.map(r => !r.ok);
+    const yMax = Math.max(30, ...h.map(r => r.ok ? r.secs : lim)) * 1.08;
+    const k1 = lineChart('chart1', xs, [
+      { key: 'best', color: '#3987e5', values: vals('inc'), dots: true, hollow },
+      { key: 'tweak', color: '#d95926', values: vals('cand'), dots: true, hollow }], yMax, v => v.toFixed(0),
+      { xLabel: v => `round ${Math.round(v)}`, empty: 'first round in progress…' });
+    $('tip1').textContent = k1 != null ? `Round ${h[k1].round} (${h[k1].which === 'inc' ? 'current best' : 'tweak'}): ${h[k1].ok ? h[k1].secs.toFixed(1) + ' s' : 'timed out with ' + Math.round(h[k1].frac * 100) + '% penned'}` : 'Hover the chart for values.';
+    $('c2title').textContent = ''; legend('c2legend', []);
+    $('chart2').style.display = 'none'; $('tip2').textContent = '';
+    return;
+  }
+  $('chart2').style.display = '';
+}
+
+function updateStats() {
+  const el = $('evostats');
+  if (hunterMode === 'predators') {
+    const m = predMeans(), gm = geneMeans(), mins = simSteps / 3600;
+    const strikeRate = evo.strikes ? (evo.kills / evo.strikes * 100).toFixed(0) + '%' : '–';
+    el.innerHTML =
+      `<span class="k">Simulated</span> ${mins.toFixed(1)} min · <span class="k">eaten</span> ${evo.kills} · <span class="k">strikes landed</span> ${strikeRate}<br>` +
+      (evolvingBoids() ? `<span class="k">Boid genes</span> sep ${gm.sep.toFixed(2)} · align ${gm.ali.toFixed(2)} · cohere ${gm.coh.toFixed(2)} · flee ${gm.flee.toFixed(2)}<br>` : '') +
+      `<span class="k">Predators</span> chase ${(m.chase / PRED_SUM).toFixed(2)} · flock ${((m.sep + m.ali + m.coh) / PRED_SUM).toFixed(2)} · picks ${m.iso > 0.15 ? 'loners' : m.iso < -0.15 ? 'crowds' : 'nearest'} (${m.iso.toFixed(2)}) · leads ${m.lead.toFixed(2)}` +
+      ($('evoPreds').checked ? ` · ${evo.predReplacements} replaced` : '');
+  } else if (hunterMode === 'dogs') {
+    const g = herd.genes, inc = herd.inc;
+    el.innerHTML =
+      `<span class="k">Round</span> ${herd.round} (${herd.trying === 'cand' ? 'trying a tweak' : 'current best'}) · <span class="k">penned</span> ${herd.penned}/${N}<br>` +
+      `<span class="k">Best average</span> ${herd.incFit === null ? '–' : herd.incFit.toFixed(1) + ' s'} over ${herd.incN} round${herd.incN === 1 ? '' : 's'}<br>` +
+      `<span class="k">Herding now</span> drive ${g.drive.toFixed(2)} · collect ${g.collect.toFixed(2)} · offset ${g.offset.toFixed(0)} · standoff ${g.standoff.toFixed(0)}` +
+      (herd.trying === 'cand' ? `<br><span class="k">Best so far</span> drive ${inc.drive.toFixed(2)} · collect ${inc.collect.toFixed(2)} · offset ${inc.offset.toFixed(0)} · standoff ${inc.standoff.toFixed(0)}` : '');
+  } else el.innerHTML = '';
+  drawCharts();
 }
 
 // ---------- UI ----------
 const outputs = {}, inputs = {};
 function fmt(key, v) {
-  if (key === 'count' || key === 'radius' || key === 'sepRadius' || key === 'fov') return String(Math.round(v));
+  if (['count', 'radius', 'sepRadius', 'fov', 'ff', 'hunters', 'fear', 'hold'].includes(key)) return String(Math.round(v));
   if (key === 'force') return v.toFixed(3);
   return v.toFixed(2);
 }
 for (const [group, list] of Object.entries(SLIDERS)) {
-  const host = document.getElementById(group);
+  const host = $(group);
   for (const [key, label, min, max, stepv] of list) {
     const row = document.createElement('div'); row.className = 'row';
-    row.innerHTML = `<label for="s-${key}">${label}</label><input id="s-${key}" type="range" min="${min}" max="${max}" step="${stepv}"><output></output>`;
+    row.innerHTML = `<label for="s-${key}" title="${label}">${label}</label><input id="s-${key}" type="range" min="${min}" max="${max}" step="${stepv}"><output></output>`;
     host.appendChild(row);
     const inp = row.querySelector('input'), out = row.querySelector('output');
     inputs[key] = inp; outputs[key] = out;
     inp.addEventListener('input', () => {
       P[key] = parseFloat(inp.value); out.textContent = fmt(key, P[key]);
       if (key === 'count') setCount(P.count);
+      if (key === 'hunters') resizeHunters();
     });
   }
 }
 function syncUI() {
   for (const k in inputs) { inputs[k].value = P[k]; outputs[k].textContent = fmt(k, P[k]); }
-  document.getElementById('edges').value = P.edges;
-  document.getElementById('color').value = P.color;
-  document.getElementById('trails').checked = P.trails;
+  $('edges').value = P.edges;
+  $('color').value = P.color;
+  $('trails').checked = P.trails;
 }
+function refreshHunterUI() {
+  for (const b of $('hunterModes').children) b.classList.toggle('on', b.dataset.h === hunterMode);
+  $('hunterOpts').style.display = hunterMode === 'none' ? 'none' : '';
+  for (const el of document.querySelectorAll('.predOnly')) el.style.display = hunterMode === 'predators' ? '' : 'none';
+  for (const el of document.querySelectorAll('.dogOnly')) el.style.display = hunterMode === 'dogs' ? '' : 'none';
+  const evolving = evolvingBoids();
+  $('rules').classList.toggle('dimmed', evolving);
+  $('rulesNote').textContent = evolving ? 'Boids are evolving: each carries its own rule weights (see Hunters). These sliders seed new runs only.' :
+    hunterMode === 'dogs' ? 'Herding turns walls on so the flock can be pushed into a corner pen.' : '';
+  updateStats();
+}
+$('hunterModes').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setHunterMode(b.dataset.h); });
+$('evoBoids').onchange = () => {
+  if ($('evoBoids').checked) { for (let i = 0; i < N; i++) { seedGenes(i, 0.25); age[i] = 0; } evo.hist = []; }
+  refreshHunterUI();
+};
+$('evoPreds').onchange = refreshHunterUI;
+$('dogLearn').onchange = refreshHunterUI;
 
-const presetHost = document.getElementById('presets');
+const presetHost = $('presets');
 function applyPreset(name) {
   Object.assign(P, DEFAULTS, PRESETS[name]);
+  if (hunterMode === 'dogs' && P.count > 300) P.count = 150;
   setCount(P.count);
   syncUI();
   for (const b of presetHost.children) b.classList.toggle('on', b.textContent === name);
@@ -620,12 +1719,12 @@ const MODES = {
   obstacle: ['Obstacle', () => (is3D ? 'Click to place a sphere in the middle plane of the box' : 'Click to place a rock') + '; drag while placing to size it. Shift-click (or right-click) removes one.'],
   inspect:  ['Inspect', () => 'Click a boid to see what it sees: ' + (is3D ? 'neighbour range' : 'field of view') + ', personal space, neighbours, and its three steering forces (red separation, green alignment, blue cohesion). Click empty space to stop.'],
 };
-const modeHost = document.getElementById('modes');
+const modeHost = $('modes');
 function setMode(m) {
   if (m === 'orbit' && !is3D) m = 'predator';
   mode = m;
   for (const b of modeHost.children) b.classList.toggle('on', b.dataset.mode === m);
-  document.getElementById('modehelp').textContent = MODES[m][1]();
+  $('modehelp').textContent = MODES[m][1]();
   canvas.style.cursor = m === 'orbit' ? 'grab' : m === 'predator' || m === 'attract' ? 'none' : m === 'inspect' ? 'pointer' : 'crosshair';
 }
 for (const [m, [label]] of Object.entries(MODES)) {
@@ -634,17 +1733,20 @@ for (const [m, [label]] of Object.entries(MODES)) {
   modeHost.appendChild(b);
 }
 
-const dimHost = document.getElementById('dims');
+const dimHost = $('dims');
 function setDim(d, fromHash) {
   is3D = d === '3d';
   setDims();
   obstacles.length = 0; focus = -1;
-  scatter();
+  for (const o of hunterList()) Object.assign(o, randomAgent(), { age: o.age });
+  if (hunterMode === 'dogs') { herd.pen = { x: -1e9, y: -1e9, z: -1e9, r: 1 }; newRound(); herd.round--; }
+  else scatter();
   for (const b of dimHost.children) b.classList.toggle('on', b.dataset.dim === (is3D ? '3d' : '2d'));
   modeHost.querySelector('[data-mode=orbit]').style.display = is3D ? '' : 'none';
-  document.getElementById('autoRow').style.display = is3D ? '' : 'none';
+  $('autoRow').style.display = is3D ? '' : 'none';
   setMode(is3D ? 'orbit' : (mode === 'orbit' ? 'predator' : mode));
   ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, W, H);
+  if (show.on) assignShow();
   if (!fromHash) { try { history.replaceState(null, '', '#' + (is3D ? '3d' : '2d')); } catch (e) {} }
 }
 for (const b of dimHost.children) b.onclick = () => setDim(b.dataset.dim);
@@ -653,19 +1755,19 @@ window.addEventListener('hashchange', () => {
   if ((h === '3d') !== is3D && (h === '3d' || h === '2d')) setDim(h, true);
 });
 
-document.getElementById('edges').onchange = e => { P.edges = e.target.value; };
-document.getElementById('color').onchange = e => { P.color = e.target.value; bucketColors(); };
-document.getElementById('trails').onchange = e => { P.trails = e.target.checked; };
-document.getElementById('autorot').onchange = e => { cam.auto = e.target.checked; };
+$('edges').onchange = e => { P.edges = e.target.value; };
+$('color').onchange = e => { P.color = e.target.value; bucketColors(); };
+$('trails').onchange = e => { P.trails = e.target.checked; };
+$('autorot').onchange = e => { cam.auto = e.target.checked; };
 
 let paused = false, stepOnce = false;
-const pauseBtn = document.getElementById('pause');
+const pauseBtn = $('pause');
 function togglePause() { paused = !paused; pauseBtn.textContent = paused ? 'Play' : 'Pause'; pauseBtn.classList.toggle('on', paused); }
 pauseBtn.onclick = togglePause;
-document.getElementById('stepbtn').onclick = () => { if (!paused) togglePause(); stepOnce = true; };
-document.getElementById('reset').onclick = scatter;
-document.getElementById('clearObs').onclick = () => { obstacles.length = 0; };
-document.getElementById('toggle').onclick = () => panel.classList.remove('hidden');
+$('stepbtn').onclick = () => { if (!paused) togglePause(); stepOnce = true; };
+$('reset').onclick = scatter;
+$('clearObs').onclick = () => { obstacles.length = 0; };
+$('toggle').onclick = () => panel.classList.remove('hidden');
 
 window.addEventListener('keydown', e => {
   if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
@@ -675,6 +1777,7 @@ window.addEventListener('keydown', e => {
   else if (e.key === 'r' || e.key === 'R') scatter();
   else if (e.key === 'd' || e.key === 'D') setDim(is3D ? '2d' : '3d');
   else if (e.key === 'h' || e.key === 'H') panel.classList.toggle('hidden');
+  else if (e.key === 'v' || e.key === 'V') toggleRecording();
 });
 
 // pointer
@@ -732,8 +1835,49 @@ canvas.addEventListener('wheel', e => {
   cam.dist = Math.max(350, Math.min(4000, cam.dist * Math.exp(e.deltaY * 0.001)));
 }, { passive: false });
 
+// ---------- video recording (canvas only, not the panel) ----------
+let recorder = null, recChunks = [], recStart = 0, recUrl = null;
+function pickMime() {
+  const types = ['video/mp4;codecs=avc1.640028', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  return types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+}
+function toggleRecording() {
+  if (recorder) { recorder.stop(); return; }
+  if (!window.MediaRecorder || !canvas.captureStream) { $('recbtn').textContent = 'Recording not supported in this browser'; return; }
+  const mime = pickMime();
+  let stream;
+  try {
+    stream = canvas.captureStream(60);
+    recorder = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 12e6 } : { videoBitsPerSecond: 12e6 });
+  } catch (err) { recorder = null; $('recbtn').textContent = 'Recording failed: ' + err.message; return; }
+  recChunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
+  recorder.onstop = () => {
+    const type = recorder.mimeType || mime || 'video/webm';
+    const secs = (performance.now() - recStart) / 1000;
+    recorder = null;
+    stream.getTracks().forEach(t => t.stop());
+    $('recbtn').textContent = '● Record video'; $('recbtn').classList.remove('on');
+    const blob = new Blob(recChunks, { type });
+    if (recUrl) URL.revokeObjectURL(recUrl);
+    recUrl = URL.createObjectURL(blob);
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    $('recvideo').src = recUrl;
+    $('recdl').href = recUrl; $('recdl').download = `boids-${stamp}.${ext}`;
+    $('recinfo').textContent = `${secs.toFixed(1)} s · ${(blob.size / 1e6).toFixed(1)} MB · ${ext.toUpperCase()}. ` +
+      'If Download does nothing, this page is embedded somewhere that blocks downloads: use https://joyhughes.github.io/boids/ instead.';
+    $('recview').style.display = 'block';
+  };
+  recorder.start(1000);
+  recStart = performance.now();
+  $('recbtn').textContent = '■ Stop recording'; $('recbtn').classList.add('on');
+}
+$('recbtn').onclick = toggleRecording;
+$('recclose').onclick = () => { $('recview').style.display = 'none'; $('recvideo').pause(); };
+
 // ---------- loop ----------
-const hud = document.getElementById('hud');
+const hud = $('hud');
 let last = performance.now(), acc = 0, frames = 0, fpsT = last, fps = 0;
 function polarisation() {
   let mx = 0, my = 0, mz = 0;
@@ -747,16 +1891,23 @@ function frame(now) {
   pointerWorld();
   if (!paused) {
     acc += dt;
-    let n = 0;
-    while (acc >= 1000 / 60 && n < 3) { step(); acc -= 1000 / 60; n++; }
-    if (n === 3) acc = 0;
+    const t0 = performance.now();
+    let ticks = 0;
+    // each 60 Hz tick runs `ff` steps; stop early if the frame is running long
+    while (acc >= 1000 / 60 && ticks < 3) {
+      for (let k = 0; k < P.ff; k++) { step(); if (performance.now() - t0 > 30) break; }
+      acc -= 1000 / 60; ticks++;
+      if (performance.now() - t0 > 30) { acc = 0; break; }
+    }
+    if (ticks === 3) acc = 0;
   } else if (stepOnce) { step(); stepOnce = false; }
   draw();
   frames++;
   if (now - fpsT > 500) {
     fps = frames * 1000 / (now - fpsT); frames = 0; fpsT = now;
     let tn = 0; for (let i = 0; i < N; i++) tn += nbr[i];
-    hud.textContent = `${is3D ? '3D' : '2D'} · ${N} boids · ${fps.toFixed(0)} fps · avg neighbours ${(N ? tn / N : 0).toFixed(1)} · polarisation ${polarisation().toFixed(2)}${paused ? ' · paused' : ''}`;
+    hud.textContent = `${is3D ? '3D' : '2D'} · ${N} boids · ${fps.toFixed(0)} fps · avg neighbours ${(N ? tn / N : 0).toFixed(1)} · polarisation ${polarisation().toFixed(2)}${paused ? ' · paused' : ''}${recorder ? ` · ● REC ${((performance.now() - recStart) / 1000).toFixed(0)} s` : ''}`;
+    if (hunterMode !== 'none') updateStats();
   }
   requestAnimationFrame(frame);
 }
@@ -766,11 +1917,14 @@ resize();
 bucketColors();
 applyPreset('Flock');
 setDim(location.hash === '#3d' ? '3d' : '2d', true);
+refreshHunterUI();
+refreshShowUI();
 requestAnimationFrame(frame);
 
 // for testing from the console
-window.boids = { P, step, setCount, scatter, applyPreset, setDim, obstacles, cam, polarisation,
-  _px: px, _py: py, _pz: pz, get N() { return N; }, get is3D() { return is3D; } };
+window.boids = { P, step, setCount, scatter, applyPreset, setDim, setHunterMode, obstacles, cam, polarisation,
+  evo, herd, preds, dogs, show, startShow, stopShow, nextShape, setCustom, textShape, geneMeans, predMeans, updateStats,
+  avgNbr() { let t = 0; for (let i = 0; i < N; i++) t += nbr[i]; return (t / N).toFixed(1); }, _px: px, _py: py, _pz: pz, get N() { return N; }, get is3D() { return is3D; } };
 </script>
 </body>
 </html>
