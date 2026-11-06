@@ -104,6 +104,7 @@
   <div class="seg"><button id="showBtn">▶ Start drone show</button><button id="showNext">Next ▸</button></div>
   <div class="row"><label>Shape</label><select id="showShape" style="grid-column:span 2"></select></div>
   <label class="chk"><input type="checkbox" id="showAuto" checked><span>Move on to the next shape automatically</span></label>
+  <label class="chk"><input type="checkbox" id="showFlock" checked><span>Fly between shapes as a flock</span></label>
   <div id="showSliders"></div>
   <div class="row"><label>Your text</label><input id="showText" type="text" value="HELLO" maxlength="40" style="grid-column:span 2"></div>
   <div class="seg"><button id="showTextBtn">Fly the text</button></div>
@@ -191,6 +192,7 @@ const SLIDERS = {
 const rand = Math.random;
 function gauss() { let u = 0; while (u === 0) u = rand(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand()); }
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const smooth01 = t => t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
 
 // ---------- world ----------
 // 2D: the world is the window (z unused, always 0).  3D: a fixed box viewed by an orbiting camera.
@@ -247,6 +249,7 @@ const px = new Float32Array(MAX), py = new Float32Array(MAX), pz = new Float32Ar
 const vx = new Float32Array(MAX), vy = new Float32Array(MAX), vz = new Float32Array(MAX);
 const ax = new Float32Array(MAX), ay = new Float32Array(MAX), az = new Float32Array(MAX);
 const nbr = new Uint16Array(MAX);
+const flk = new Float32Array(MAX);   // drone show: how much each drone is flocking (1 = in transit, 0 = holding its place)
 const inPen = new Uint8Array(MAX);   // sheepdog rounds: boids inside the pen settle down
 const pcx = new Float32Array(MAX), pcy = new Float32Array(MAX), pcz = new Float32Array(MAX);   // body-overlap corrections
 // genes: weights for separation, alignment, cohesion and fleeing.  They always sum to geneSum,
@@ -521,7 +524,8 @@ function step() {
   const usePointer = pointer.inside && (mode === 'predator' || mode === 'attract');
   const evolving = evolvingBoids();
   const hunters = hunterList(), fear2 = P.fear * P.fear;
-  const showOn = show.on, showS = Math.max(P.speed * 1.6, 5);
+  const showOn = show.on, showS = Math.max(P.speed * 1.6, 5), flockOn = $('showFlock').checked, flyS = Math.max(P.speed * 1.2, 4);
+  let travelling = 0;
   const dmin = (is3D ? 7 : 5.5) * P.size, dmin2 = dmin * dmin;
   if (showOn) updateShowTargets();
 
@@ -572,6 +576,22 @@ function step() {
       const f = Math.hypot(fx, fy, fz), cap = maxF * 6;
       if (f > cap) { fx *= cap / f; fy *= cap / f; fz *= cap / f; }
       if (ns) { steer(sx, sy, sz, ux, uy, uz, showS, maxF * 2); const w = Math.min(1, d / 30) * 0.8; fx += w * sx_; fy += w * sy_; fz += w * sz_; }
+      // in transit, drones fly as boids: separation, alignment and cohesion with their neighbours (using the
+      // flock sliders) plus a pull towards their target that grows over the first few seconds of a change.
+      // Close to the target this fades out and the plain arrival steering above lands them precisely.
+      const fl = flockOn ? smooth01((d - 10) / 90) : 0;
+      flk[i] = fl; if (fl > 0.05) travelling++;
+      if (fl > 0) {
+        const g = 0.15 + 1.85 * smooth01((show.t - 0.8) / 4);
+        steer(gx, gy, gz, ux, uy, uz, flyS, maxF * 1.5);
+        let bx = g * sx_, by = g * sy_, bz = g * sz_;
+        if (ns) { steer(sx, sy, sz, ux, uy, uz, flyS, maxF); bx += P.sep * sx_; by += P.sep * sy_; bz += P.sep * sz_; }
+        if (n) {
+          steer(avx, avy, avz, ux, uy, uz, flyS, maxF); bx += P.ali * sx_; by += P.ali * sy_; bz += P.ali * sz_;
+          steer(cx, cy, cz, ux, uy, uz, flyS, maxF); bx += P.coh * sx_; by += P.coh * sy_; bz += P.coh * sz_;
+        }
+        fx += fl * (bx - fx); fy += fl * (by - fy); fz += fl * (bz - fz);
+      }
       if (usePointer && mode === 'predator') {
         delta(x, y, z, pointer.wx, pointer.wy, pointer.wz);
         const pd = Math.hypot(dx_, dy_, dz_);
@@ -642,8 +662,9 @@ function step() {
     let ux = vx[i] + ax[i], uy = vy[i] + ay[i], uz = vz[i] + az[i];
     const s = Math.hypot(ux, uy, uz);
     const cap = inPen[i] ? capS * 0.4 : capS;   // penned sheep amble
+    const mS = showOn ? flk[i] * maxS * 0.6 * smooth01(show.t) : minS;   // drones in transit keep flying like birds
     if (s > cap) { const k = cap / s; ux *= k; uy *= k; uz *= k; }
-    else if (s < minS) { if (s < 1e-6) { ux = minS; uy = 0; uz = 0; } else { const k = minS / s; ux *= k; uy *= k; uz *= k; } }
+    else if (s < mS) { if (s < 1e-6) { ux = mS; uy = 0; uz = 0; } else { const k = mS / s; ux *= k; uy *= k; uz *= k; } }
     vtmp[0] = ux; vtmp[1] = uy; vtmp[2] = uz;
     confine(px[i] + ux + pcx[i], py[i] + uy + pcy[i], pz[i] + uz + pcz[i], vtmp);
     pcx[i] = 0; pcy[i] = 0; pcz[i] = 0;
@@ -652,7 +673,7 @@ function step() {
     age[i]++;
   }
 
-  if (showOn) advanceShow();
+  if (showOn) { if (show.arrived < 0 && travelling < N * 0.1) show.arrived = show.t; advanceShow(); }
   if (hunterMode === 'predators') stepPredators();
   else if (hunterMode === 'dogs') stepDogs();
   simSteps++;
@@ -1663,7 +1684,7 @@ function sampleDrawn(shape, n, inflate) {
   return { X, Y, Z, C, palette };
 }
 
-const show = { on: false, idx: 0, t: 0, list: SHAPES.slice(), cur: SHAPES[0], palette: ['#fff'],
+const show = { on: false, idx: 0, t: 0, arrived: -1, list: SHAPES.slice(), cur: SHAPES[0], palette: ['#fff'],
   bx: new Float32Array(MAX), by: new Float32Array(MAX), bz: new Float32Array(MAX), col: new Uint16Array(MAX),
   tx: new Float32Array(MAX), ty: new Float32Array(MAX), tz: new Float32Array(MAX) };
 
@@ -1700,7 +1721,7 @@ function assignShow() {
   const to = Array.from({ length: N }, (_, j) => j).sort((a, b) => tk[a] - tk[b]);
   const bo = Array.from({ length: N }, (_, j) => j).sort((a, b) => bk[a] - bk[b]);
   for (let j = 0; j < N; j++) { const b = bo[j], t = to[j]; show.bx[b] = smp.X[t]; show.by[b] = smp.Y[t]; show.bz[b] = smp.Z[t]; show.col[b] = smp.C[t]; }
-  show.t = 0;
+  show.t = 0; show.arrived = -1;
 }
 function startShow(idx) {
   if (hunterMode !== 'none') setHunterMode('none');
@@ -1720,7 +1741,12 @@ function warmNext() {
   if (nxt && nxt.model) setTimeout(() => { if (show.on && is3D && N === n) sampleModel(nxt, n); }, 1500);
 }
 function nextShape() { show.idx = (show.idx + 1) % show.list.length; show.cur = show.list[show.idx]; assignShow(); refreshShowUI(); warmNext(); }
-function advanceShow() { show.t += 1 / 60; if ($('showAuto').checked && show.t > P.hold) nextShape(); }
+// the hold time starts once the drones have (mostly) landed, so a long flocking flight doesn't eat into it
+function advanceShow() {
+  show.t += 1 / 60;
+  const held = show.arrived < 0 ? (show.t > 12 ? show.t - 12 : 0) : show.t - show.arrived;
+  if ($('showAuto').checked && held > P.hold) nextShape();
+}
 
 function drawShow() {
   // in 3D, drones are binned by depth so far ones glow dimmer (additive blending needs no sorting)
@@ -2400,7 +2426,7 @@ requestAnimationFrame(frame);
 // for testing from the console
 window.boids = { P, step, setCount, scatter, applyPreset, setDim, setHunterMode, obstacles, cam, polarisation,
   evo, herd, preds, dogs, show, startShow, stopShow, nextShape, setCustom, textShape, geneMeans, predMeans, updateStats,
-  avgNbr() { let t = 0; for (let i = 0; i < N; i++) t += nbr[i]; return (t / N).toFixed(1); }, _px: px, _py: py, _pz: pz, get N() { return N; }, get is3D() { return is3D; } };
+  avgNbr() { let t = 0; for (let i = 0; i < N; i++) t += nbr[i]; return (t / N).toFixed(1); }, _px: px, _py: py, _pz: pz, _vx: vx, _vy: vy, _vz: vz, get N() { return N; }, get is3D() { return is3D; } };
 </script>
 </body>
 </html>
