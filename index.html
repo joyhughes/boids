@@ -903,9 +903,12 @@ function stepDogs() {
 }
 
 // ---------- drone show ----------
-// Each shape is drawn on a hidden canvas, spread into one target point per boid (a hex grid fitted to the
-// filled area), coloured from the drawing, and optionally bent over time by anim(x, y, t) -> AX, AY, AZ.
+// Most shapes are drawn on a hidden canvas and spread into one target point per boid. In 3D the drawing is
+// "inflated": depth comes from each pixel's distance to the edge and the local thickness of the shape, so
+// thin strokes become round tubes and broad areas become domes, with drones on the front, the back and a
+// rim around the silhouette. A few shapes are built directly in 3D (gen). anim(x, y, z, t) -> AX, AY, AZ.
 let AX = 0, AY = 0, AZ = 0;
+const GA = Math.PI * (3 - Math.sqrt(5));   // golden angle, for even spirals
 function mulberry(seed) {
   return () => { seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 }
@@ -918,10 +921,35 @@ function star(c, x, y, R, r, n = 5, rot = -Math.PI / 2) {
 function tri(c, a, b, d, e, f, g) { c.beginPath(); c.moveTo(a, b); c.lineTo(d, e); c.lineTo(f, g); c.closePath(); c.fill(); }
 function line(c, a, b, d, e) { c.beginPath(); c.moveTo(a, b); c.lineTo(d, e); c.stroke(); }
 function hole(c, f) { c.save(); c.globalCompositeOperation = 'destination-out'; f(); c.restore(); }
-function turn(x, y, a) { AX = x * Math.cos(a); AY = y; AZ = x * Math.sin(a); }   // rotate about the vertical axis (2D: narrows)
+// rotate about the vertical axis (in 2D this just narrows the shape, which reads as turning)
+function turn(x, y, z, a) { const ca = Math.cos(a), sa = Math.sin(a); AX = x * ca + z * sa; AY = y; AZ = -x * sa + z * ca; }
+// rotate about the vertical axis, then tilt toward the viewer about the horizontal axis
+function spinTilt(x, y, z, a, tilt) {
+  const ca = Math.cos(a), sa = Math.sin(a), x1 = x * ca + z * sa, z1 = -x * sa + z * ca;
+  const ct = Math.cos(tilt), st = Math.sin(tilt);
+  AX = x1; AY = y * ct - z1 * st; AZ = y * st + z1 * ct;
+}
+
+// collects generated 3D points with a small colour palette
+function builder(n) {
+  const X = new Float32Array(n), Y = new Float32Array(n), Z = new Float32Array(n), C = new Uint16Array(n), palette = [], pm = new Map();
+  let k = 0;
+  return {
+    X, Y, Z, C, palette,
+    add(x, y, z, col) { if (k >= n) return; if (!pm.has(col)) { pm.set(col, palette.length); palette.push(col); } X[k] = x; Y[k] = y; Z[k] = z; C[k] = pm.get(col); k++; },
+    done() {   // top up any shortfall by doubling points with a little jitter
+      const m = k, r = mulberry(9);
+      while (k < n && m > 0) { const q = (r() * m) | 0; X[k] = X[q] + (r() - 0.5) * 3; Y[k] = Y[q] + (r() - 0.5) * 3; Z[k] = Z[q] + (r() - 0.5) * 3; C[k] = C[q]; k++; }
+      return { X, Y, Z, C, palette };
+    },
+  };
+}
+function gaussFrom(r) { return () => Math.sqrt(-2 * Math.log(r() + 1e-9)) * Math.cos(2 * Math.PI * r()); }
+
+const FIREWORKS = [[190, 170, 110, '#ff4d6d'], [400, 125, 130, '#4dd2ff'], [600, 190, 100, '#ffd84d']];
 
 const SHAPES = [
-  { name: 'Chinese dragon', w: 1080, h: 380,
+  { name: 'Chinese dragon', w: 1080, h: 380, depth: 1,
     draw(c, w, h) {
       const cy = h / 2;
       const bw = x => 54 * (1 - 0.78 * Math.min(1, Math.max(0, (x - 250) / 760)));
@@ -947,12 +975,12 @@ const SHAPES = [
       hole(c, () => { ell(c, 186, cy - 22, 5, 6); c.lineWidth = 5; line(c, 92, cy + 16, 170, cy + 14); });
       c.fillStyle = '#e8f4ff'; ell(c, 34, cy - 60, 24, 24);           // the pearl it chases
     },
-    anim(x, y, t) {
-      if (x < -470) { AX = x + 8 * Math.cos(t * 1.3); AY = y + 14 * Math.sin(t * 2); AZ = 0; return; }
+    anim(x, y, z, t) {
+      if (x < -470) { AX = x + 8 * Math.cos(t * 1.3); AY = y + 14 * Math.sin(t * 2); AZ = z + 10 * Math.sin(t * 1.1); return; }
       const amp = 16 + 46 * Math.min(1, Math.max(0, (x + 300) / 500)), ph = x * 0.011 - t * 2.6;
-      AX = x; AY = y + amp * Math.sin(ph); AZ = amp * 0.9 * Math.cos(ph);
+      AX = x; AY = y + amp * Math.sin(ph); AZ = z + amp * 0.9 * Math.cos(ph);
     } },
-  { name: 'Maple leaf', w: 520, h: 560,
+  { name: 'Maple leaf', w: 520, h: 560, depth: 0.3, back: 'same',
     draw(c, w, h) {
       const R = [[0, 1], [0.08, 0.78], [0.2, 0.83], [0.15, 0.55], [0.42, 0.7], [0.4, 0.6], [0.62, 0.66], [0.52, 0.47], [0.6, 0.42], [0.3, 0.26], [0.36, 0.18], [0.05, 0.2]];
       const pts = [...R, ...R.slice(1).reverse().map(([x, y]) => [-x, y])];
@@ -960,8 +988,11 @@ const SHAPES = [
       c.fillStyle = '#ff2a2a'; c.beginPath(); pts.forEach(([x, y]) => c.lineTo(X(x), Y(y))); c.closePath(); c.fill();
       c.fillRect(X(-0.025), Y(0.22), 20, 0.3 * 440);
     },
-    anim(x, y, t) { turn(x, y + 8 * Math.sin(t * 1.4), 0.45 * Math.sin(t * 0.9)); } },
-  { name: 'Face', w: 440, h: 540,
+    anim(x, y, z, t) {
+      // the leaf curls a little along its midrib as it turns
+      turn(x, y + 8 * Math.sin(t * 1.4), z + 0.0006 * x * x * Math.sin(t * 0.7), 0.6 * Math.sin(t * 0.5));
+    } },
+  { name: 'Face', w: 440, h: 540, depth: 0.55, back: '#9a5530',
     draw(c) {
       c.fillStyle = '#9a5530'; ell(c, 220, 205, 180, 165);
       c.fillStyle = '#f4c7a1'; ell(c, 72, 295, 22, 38); ell(c, 368, 295, 22, 38); ell(c, 220, 295, 150, 195);
@@ -974,13 +1005,15 @@ const SHAPES = [
       c.fillStyle = '#f59a9a'; ell(c, 138, 335, 22, 15); ell(c, 302, 335, 22, 15);
       c.strokeStyle = '#e0384a'; c.lineWidth = 12; c.beginPath(); c.arc(220, 350, 62, 0.18 * Math.PI, 0.82 * Math.PI); c.stroke();
     },
-    anim(x, y, t) {
+    anim(x, y, z, t) {
       const ph = (t % 4) / 4, b = ph < 0.06 ? Math.sin(Math.PI * ph / 0.06) : 0;   // blink every 4 s
       let yy = y;
       if (b > 0 && Math.abs(y + 18) < 24 && Math.abs(Math.abs(x) - 62) < 40) yy = -18 + (y + 18) * (1 - 0.92 * b);
-      turn(x, yy, 0.3 * Math.sin(t * 0.7));
+      // the nose pokes forward on the front of the head
+      const nose = z < 0 ? -28 * Math.exp(-((x + 4) ** 2 + (y - 32) ** 2) / 900) : 0;
+      turn(x, yy, z + nose, 0.55 * Math.sin(t * 0.6));
     } },
-  { name: 'Butterfly', w: 640, h: 500,
+  { name: 'Butterfly', w: 640, h: 500, depth: 0.25, back: 'same',
     draw(c, w) {
       const half = () => {
         c.fillStyle = '#2f8cff'; ell(c, 205, 185, 125, 88, -0.5);
@@ -995,12 +1028,36 @@ const SHAPES = [
       c.beginPath(); c.moveTo(314, 138); c.quadraticCurveTo(290, 90, 270, 70); c.moveTo(326, 138); c.quadraticCurveTo(350, 90, 370, 70); c.stroke();
       ell(c, 270, 70, 6, 6); ell(c, 370, 70, 6, 6);
     },
-    anim(x, y, t) {
+    anim(x, y, z, t) {
+      // wings hinge on the body and beat; the whole butterfly drifts in a lazy loop and banks
       const th = 1.15 * Math.pow(0.5 + 0.5 * Math.sin(t * 5), 1.5), ax = Math.abs(x);
-      if (ax > 14) { AX = Math.sign(x) * (14 + (ax - 14) * Math.cos(th)); AZ = (ax - 14) * Math.sin(th); } else { AX = x; AZ = 0; }
-      AY = y + 10 * Math.sin(t * 5 + 1); AX += 50 * Math.sin(t * 0.6);
+      let X = x, Z = z;
+      if (ax > 14) { const u = ax - 14; X = Math.sign(x) * (14 + u * Math.cos(th)); Z = z + u * Math.sin(th); }
+      turn(X, y + 10 * Math.sin(t * 5 + 1), Z, 0.5 * Math.sin(t * 0.4));
+      AX += 50 * Math.sin(t * 0.6);
     } },
-  { name: 'Jack-o’-lantern', w: 520, h: 470,
+  { name: 'Saturn', w: 560, h: 430,
+    gen(n) {
+      const b = builder(n), nP = Math.round(n * 0.55), nR = n - nP;
+      const bands = ['#f3dfb0', '#e2b871', '#f0d49a', '#c99a5b', '#ecd3a0', '#d6a865'];
+      for (let i = 0; i < nP; i++) {
+        const yv = 1 - 2 * (i + 0.5) / nP, r = Math.sqrt(1 - yv * yv), th = i * GA;
+        b.add(120 * r * Math.cos(th), 120 * yv, 120 * r * Math.sin(th), bands[Math.floor((Math.asin(yv) / (Math.PI / 2) + 1) * 4.5) % 6]);
+      }
+      // two ring bands either side of the Cassini division, evenly spread (sunflower pattern)
+      const rings = [[155, 205, '#e0c995'], [213, 250, '#b89c6a']];
+      const area = ([a, c]) => c * c - a * a, tot = area(rings[0]) + area(rings[1]);
+      rings.forEach((rg, k) => {
+        const m = k === 0 ? Math.round(nR * area(rg) / tot) : nR - Math.round(nR * area(rings[0]) / tot);
+        for (let i = 0; i < m; i++) { const r = Math.sqrt(rg[0] ** 2 + (rg[1] ** 2 - rg[0] ** 2) * (i + 0.5) / m), th = i * GA; b.add(r * Math.cos(th), 0, r * Math.sin(th), rg[2]); }
+      });
+      return b.done();
+    },
+    anim(x, y, z, t) {
+      spinTilt(x, y, z, t * 0.35, 0.42);
+      const c = Math.cos(-0.25), s = Math.sin(-0.25), X = AX; AX = X * c - AY * s; AY = X * s + AY * c;
+    } },
+  { name: 'Jack-o’-lantern', w: 520, h: 470, depth: 0.75, back: '#ff7a00',
     draw(c) {
       c.fillStyle = '#ff7a00'; ell(c, 175, 265, 110, 165); ell(c, 345, 265, 110, 165); ell(c, 260, 265, 175, 170);
       c.strokeStyle = '#c85400'; c.lineWidth = 6;
@@ -1012,8 +1069,8 @@ const SHAPES = [
       for (const [x, y] of [[185, 325], [200, 305], [220, 330], [240, 310], [260, 332], [280, 310], [300, 330], [320, 305], [335, 325], [370, 305]]) c.lineTo(x, y);
       c.quadraticCurveTo(260, 420, 150, 305); c.fill();
     },
-    anim(x, y, t) { turn(x, y + 8 * Math.sin(t * 1.8), 0.35 * Math.sin(t * 0.6)); } },
-  { name: 'Diwali lamp', w: 520, h: 460,
+    anim(x, y, z, t) { turn(x, y + 8 * Math.sin(t * 1.8), z, 0.6 * Math.sin(t * 0.45)); } },
+  { name: 'Diwali lamp', w: 520, h: 460, depth: 0.7, back: 'same',
     draw(c) {
       c.fillStyle = '#ff8c1a'; c.beginPath(); c.ellipse(260, 320, 190, 85, 0, 0, Math.PI); c.fill();
       c.beginPath(); c.moveTo(420, 300); c.lineTo(490, 290); c.lineTo(430, 335); c.fill();
@@ -1024,11 +1081,12 @@ const SHAPES = [
       const cols = ['#ff3b6b', '#ffd23f', '#3fd0ff', '#7be08a'];
       for (let k = 0; k < 20; k++) { c.fillStyle = cols[k % 4]; ell(c, 60 + k * 21, 435, 7, 7); }
     },
-    anim(x, y, t) {
-      AX = x; AY = y; AZ = 0;
-      if (y < 60) { const f = (60 - y) / 170; AX = x + 7 * f * Math.sin(t * 8 + y * 0.05); AY = y + 3 * f * Math.sin(t * 11); }
+    anim(x, y, z, t) {
+      let X = x, Y = y;
+      if (y < 60) { const f = (60 - y) / 170; X = x + 7 * f * Math.sin(t * 8 + y * 0.05); Y = y + 3 * f * Math.sin(t * 11); }
+      turn(X, Y, z, 0.5 * Math.sin(t * 0.4));
     } },
-  { name: 'Menorah', w: 640, h: 520,
+  { name: 'Menorah', w: 640, h: 520, depth: 1, back: 'same',
     draw(c) {
       c.strokeStyle = '#ffc23a'; c.lineWidth = 12;
       for (let k = 1; k <= 4; k++) { c.beginPath(); c.arc(320, 250, 62 * k, 0, Math.PI); c.stroke(); }
@@ -1040,26 +1098,38 @@ const SHAPES = [
         c.fillStyle = '#ffc23a'; c.fillRect(x - 14, 244, 28, 10);
       }
     },
-    anim(x, y, t) {
-      AX = x; AY = y; AZ = 0;
-      if (y < -78) { AX = x + 3 * Math.sin(t * 11 + x * 0.7); AY = y + 2 * Math.sin(t * 13 + x); }
+    anim(x, y, z, t) {
+      let X = x, Y = y;
+      if (y < -78) { X = x + 3 * Math.sin(t * 11 + x * 0.7); Y = y + 2 * Math.sin(t * 13 + x); }
+      turn(X, Y, z, 0.6 * Math.sin(t * 0.35));
     } },
   { name: 'Christmas tree', w: 480, h: 620,
-    draw(c) {
-      c.fillStyle = '#1fae4b';
-      tri(c, 240, 70, 110, 250, 370, 250); tri(c, 240, 170, 80, 390, 400, 390); tri(c, 240, 290, 50, 520, 430, 520);
-      c.fillStyle = '#b5652d'; c.fillRect(210, 520, 60, 60);
-      c.strokeStyle = '#fff6c8'; c.lineWidth = 5;
-      for (const [a, b, d] of [[120, 240, 290], [95, 375, 430], [70, 505, 570]]) { c.beginPath(); c.moveTo(a, b); c.quadraticCurveTo(240, d, 480 - a, b); c.stroke(); }
-      for (const [x, y, col] of [[200, 180, '#ff3b3b'], [275, 215, '#4aa3ff'], [170, 330, '#ffd23f'], [300, 300, '#ffffff'], [240, 355, '#ff3b3b'],
-        [130, 460, '#4aa3ff'], [220, 470, '#c77dff'], [330, 450, '#ffd23f'], [380, 500, '#ff3b3b'], [100, 505, '#ffffff']]) { c.fillStyle = col; ell(c, x, y, 13, 13); }
-      c.fillStyle = '#ffd700'; star(c, 240, 62, 46, 19);
+    gen(n) {
+      // three stacked cones with lit ornaments, a spiral garland, a trunk and a star
+      const b = builder(n), r = mulberry(21);
+      const tiers = [[-240, -60, 130], [-140, 80, 160], [-20, 210, 190]];
+      const areas = tiers.map(([a, c, R]) => R * Math.hypot(R, c - a)), At = areas.reduce((p, q) => p + q);
+      const nCone = Math.round(n * 0.72), nGar = Math.round(n * 0.1), nTrunk = Math.round(n * 0.05), nStar = n - nCone - nGar - nTrunk;
+      const orn = ['#ff3b3b', '#4aa3ff', '#ffd23f', '#ffffff', '#c77dff'];
+      tiers.forEach(([ya, yb, R], ti) => {
+        const m = Math.round(nCone * areas[ti] / At);
+        for (let i = 0; i < m; i++) {
+          const v = Math.sqrt((i + 0.5) / m), y = ya + v * (yb - ya), rr = v * R, th = i * GA;
+          b.add(rr * Math.cos(th), y, rr * Math.sin(th), (i * 7919) % 13 === 0 ? orn[i % 5] : v > 0.96 ? '#7dffa0' : '#1fae4b');
+        }
+      });
+      const coneR = y => { let best = 0; for (const [ya, yb, R] of tiers) if (y >= ya && y <= yb) best = Math.max(best, (y - ya) / (yb - ya) * R); return best; };
+      for (let i = 0; i < nGar; i++) { const u = i / nGar, y = -235 + u * 440, th = u * Math.PI * 2 * 5.5, rr = coneR(y) + 7; b.add(rr * Math.cos(th), y, rr * Math.sin(th), i % 6 < 3 ? '#fff6c8' : '#ffd23f'); }
+      for (let i = 0; i < nTrunk; i++) { const th = i * GA, y = 210 + ((i * 0.618034) % 1) * 65; b.add(26 * Math.cos(th), y, 26 * Math.sin(th), '#b5652d'); }
+      // star: a thick five-pointed star (points chosen inside its outline)
+      const sv = []; for (let k = 0; k < 10; k++) { const ang = -Math.PI / 2 + k * Math.PI / 5, q = k % 2 ? 19 : 46; sv.push([q * Math.cos(ang), q * Math.sin(ang)]); }
+      const inStar = (x, y) => { let inside = false; for (let i = 0, j = 9; i < 10; j = i++) { const [xi, yi] = sv[i], [xj, yj] = sv[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside; } return inside; };
+      let made = 0, guard = 0;
+      while (made < nStar && guard++ < nStar * 50) { const x = (r() - 0.5) * 92, y = (r() - 0.5) * 92; if (inStar(x, y)) { b.add(x, -262 + y, (r() - 0.5) * 16, '#ffd700'); made++; } }
+      return b.done();
     },
-    anim(x, y, t) {
-      if (y < -205) { AX = x * Math.cos(t * 1.1); AY = y; AZ = x * Math.sin(t * 1.1); }   // the star spins
-      else { AX = x; AY = y; AZ = 0; }
-    } },
-  { name: 'Snowflake', w: 500, h: 500,
+    anim(x, y, z, t) { turn(x, y, z, t * 0.45); } },
+  { name: 'Snowflake', w: 500, h: 500, flat: true,
     draw(c) {
       c.strokeStyle = '#cfe9ff'; c.translate(250, 250);
       for (let k = 0; k < 6; k++) {
@@ -1071,21 +1141,45 @@ const SHAPES = [
       c.fillStyle = '#ffffff'; star(c, 0, 0, 42, 42, 3, 0);
       c.setTransform(1, 0, 0, 1, 0, 0);
     },
-    anim(x, y, t) { const a = t * 0.3, ca = Math.cos(a), sa = Math.sin(a); AX = x * ca - y * sa; AY = x * sa + y * ca; AZ = 0; } },
-  { name: 'Crescent and star', w: 560, h: 480,
+    anim(x, y, z, t) {
+      // a flat crystal that spins in its plane and tumbles slowly
+      const a = t * 0.3, X = x * Math.cos(a) - y * Math.sin(a), Y = x * Math.sin(a) + y * Math.cos(a);
+      const b = 0.7 * Math.sin(t * 0.35);
+      AX = X; AY = Y * Math.cos(b) - z * Math.sin(b); AZ = Y * Math.sin(b) + z * Math.cos(b);
+    } },
+  { name: 'Crescent and star', w: 560, h: 480, depth: 0.6,
     draw(c) {
       c.fillStyle = '#ffd54a'; ell(c, 230, 240, 195, 195);
       hole(c, () => ell(c, 300, 200, 170, 170));
       c.fillStyle = '#fff0a0'; star(c, 420, 215, 72, 29);
     },
-    anim(x, y, t) {
+    anim(x, y, z, t) {
       const sx = 140, sy = -25;
       if (x > 60 && Math.hypot(x - sx, y - sy) < 80) {
-        const a = 0.5 * Math.sin(t * 1.5), dx = x - sx, dy = y - sy;
-        AX = sx + dx * Math.cos(a) - dy * Math.sin(a); AY = sy + dx * Math.sin(a) + dy * Math.cos(a); AZ = 0;
-      } else turn(x, y, 0.3 * Math.sin(t * 0.5));
+        const a = t * 0.9, dx = x - sx;                       // the star spins on its own axis
+        AX = sx + dx * Math.cos(a) + z * Math.sin(a); AY = y; AZ = -dx * Math.sin(a) + z * Math.cos(a);
+        const X = AX, Z = AZ; turn(X, AY, Z, 0.4 * Math.sin(t * 0.4));
+      } else turn(x, y, z, 0.4 * Math.sin(t * 0.4));
     } },
-  { name: 'Beating heart', w: 500, h: 460,
+  { name: 'DNA double helix', w: 320, h: 580,
+    gen(n) {
+      const b = builder(n), ns = Math.round(n * 0.3), nr = n - 2 * ns, R = 90, turns = 3.2, rungs = 30;
+      for (const s of [0, 1]) for (let i = 0; i < ns; i++) {
+        const u = (i + 0.5) / ns, th = u * Math.PI * 2 * turns + s * Math.PI, y = -270 + 540 * u, a = i * GA;
+        b.add((R + 6 * Math.cos(a)) * Math.cos(th), y + 6 * Math.sin(a), (R + 6 * Math.cos(a)) * Math.sin(th), s ? '#ff8fc8' : '#7fd3ff');
+      }
+      const per = Math.max(2, Math.floor(nr / rungs)), pairs = [['#ff5a5a', '#4aa3ff'], ['#5be37d', '#ffd23f']];
+      for (let k = 0; k < rungs; k++) {
+        const u = (k + 0.5) / rungs, th = u * Math.PI * 2 * turns, y = -270 + 540 * u, pr = pairs[k % 2], flip = (k >> 1) % 2;
+        for (let j = 0; j < per; j++) {
+          const f = (j + 0.5) / per, rr = R * (1 - 2 * f);
+          b.add(rr * Math.cos(th), y, rr * Math.sin(th), (f < 0.5) !== !!flip ? pr[0] : pr[1]);
+        }
+      }
+      return b.done();
+    },
+    anim(x, y, z, t) { turn(x, y, z, t * 0.8); } },
+  { name: 'Beating heart', w: 500, h: 460, depth: 0.7,
     draw(c) {
       c.fillStyle = '#ff2d55'; c.beginPath();
       for (let k = 0; k <= 200; k++) {
@@ -1098,45 +1192,69 @@ const SHAPES = [
       c.fillStyle = '#ffd23f'; tri(c, 462, 78, 412, 92, 444, 126);
       c.lineWidth = 5; for (const k of [0, 18, 36]) { line(c, 40 + k, 400 - k * 0.76, 30 + k, 380 - k * 0.76); line(c, 40 + k, 400 - k * 0.76, 58 + k, 408 - k * 0.76); }
     },
-    anim(x, y, t) {
+    anim(x, y, z, t) {
       const m = t % 1.2, s = 1 + 0.09 * Math.exp(-(((m - 0.1) / 0.06) ** 2)) + 0.06 * Math.exp(-(((m - 0.32) / 0.06) ** 2));
-      AX = x * s; AY = y * s; AZ = 0;
+      turn(x * s, y * s, z * s, 0.5 * Math.sin(t * 0.4));
     } },
-  { name: 'Fireworks 2027', w: 760, h: 560,
-    draw(c) {
-      for (const [x, y, r, col] of FIREWORKS) {
-        c.strokeStyle = col; c.lineWidth = 6;
-        for (let k = 0; k < 20; k++) { const a = k / 20 * 2 * Math.PI; line(c, x + r * 0.3 * Math.cos(a), y + r * 0.3 * Math.sin(a), x + r * Math.cos(a), y + r * Math.sin(a)); }
-        c.fillStyle = '#ffffff'; ell(c, x, y, 8, 8);
+  { name: 'Trefoil knot', w: 540, h: 540,
+    gen(n) {
+      const b = builder(n), ring = 10, m = Math.max(8, Math.floor(n / ring)), S = 72, tube = 24;
+      const P = t => [Math.sin(t) + 2 * Math.sin(2 * t), Math.cos(t) - 2 * Math.cos(2 * t) + 0.5, -Math.sin(3 * t)];
+      for (let i = 0; i < m; i++) {
+        const t = i / m * Math.PI * 2, p = P(t), p1 = P(t + 1e-3), p0 = P(t - 1e-3);
+        let T = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]]; const tl = Math.hypot(...T); T = T.map(v => v / tl);
+        let Nn = [T[1], -T[0], 0]; let nl = Math.hypot(...Nn); if (nl < 1e-3) { Nn = [0, T[2], -T[1]]; nl = Math.hypot(...Nn); } Nn = Nn.map(v => v / nl);
+        const B = [T[1] * Nn[2] - T[2] * Nn[1], T[2] * Nn[0] - T[0] * Nn[2], T[0] * Nn[1] - T[1] * Nn[0]];
+        const col = `hsl(${(Math.round(i / m * 24) % 24) * 15},85%,62%)`;
+        for (let j = 0; j < ring; j++) {
+          const ph = j / ring * Math.PI * 2 + i * 0.35, c = Math.cos(ph) * tube, s = Math.sin(ph) * tube;
+          b.add(p[0] * S + c * Nn[0] + s * B[0], -(p[1] * S + c * Nn[1] + s * B[1]), p[2] * S * 1.6 + c * Nn[2] + s * B[2], col);
+        }
       }
-      c.fillStyle = '#ffe9a8'; c.font = '900 150px system-ui, sans-serif'; c.textAlign = 'center'; c.fillText('2027', 380, 520);
+      return b.done();
     },
-    anim(x, y, t) {
-      AX = x; AY = y; AZ = 0;
-      if (y > 60) return;                              // the "2027" stays put
+    anim(x, y, z, t) { spinTilt(x, y, z, t * 0.35, 0.35 * Math.sin(t * 0.25)); } },
+  { name: 'Fireworks 2027', w: 760, h: 560,
+    gen(n) {
+      const b = builder(n), nText = Math.round(n * 0.28);
+      const txt = sampleDrawn({ w: 760, h: 560, depth: 0.45, draw(c) { c.fillStyle = '#ffe9a8'; c.font = '900 150px system-ui, sans-serif'; c.textAlign = 'center'; c.fillText('2027', 380, 520); } }, nText, is3D);
+      for (let k = 0; k < nText; k++) b.add(txt.X[k], txt.Y[k], txt.Z[k], txt.palette[txt.C[k]]);
+      // each burst is a sphere of rays (a 2D view sees them face-on)
+      const per = Math.floor((n - nText) / 3), dirs = 34;
+      FIREWORKS.forEach(([fx, fy, R, col]) => {
+        const along = Math.max(2, Math.floor(per / dirs));
+        for (let d = 0; d < dirs; d++) {
+          const yv = 1 - 2 * (d + 0.5) / dirs, rr = Math.sqrt(1 - yv * yv), th = d * GA;
+          const ux = rr * Math.cos(th), uy = yv, uz = rr * Math.sin(th);
+          for (let j = 0; j < along; j++) { const f = 0.3 + 0.7 * (j + 0.5) / along; b.add(fx - 380 + ux * R * f, fy - 280 + uy * R * f, uz * R * f, j === along - 1 ? '#ffffff' : col); }
+        }
+      });
+      return b.done();
+    },
+    anim(x, y, z, t) {
+      if (y > 60) { turn(x, y, z, 0.35 * Math.sin(t * 0.5)); return; }   // "2027" sways gently
       let best = 0, bd = Infinity;
       FIREWORKS.forEach(([fx, fy], k) => { const d = Math.hypot(x - (fx - 380), y - (fy - 280)); if (d < bd) { bd = d; best = k; } });
       const cx = FIREWORKS[best][0] - 380, cy = FIREWORKS[best][1] - 280;
       const p = (t * 0.45 + best * 0.33) % 1, s = 0.15 + 0.85 * Math.sin(Math.PI * p);
-      AX = cx + (x - cx) * s; AY = cy + (y - cy) * s + 30 * p * p; AZ = (x - cx) * 0.4 * s;
+      AX = cx + (x - cx) * s; AY = cy + (y - cy) * s + 30 * p * p; AZ = z * s;
     } },
   { name: 'Spiral galaxy', w: 560, h: 560,
-    draw(c) {
-      const r = mulberry(7), g = () => Math.sqrt(-2 * Math.log(r() + 1e-9)) * Math.cos(2 * Math.PI * r());
-      for (let k = 0; k < 500; k++) { c.fillStyle = '#fff4d6'; ell(c, 280 + g() * 30, 280 + g() * 30, 3, 3); }
-      for (let k = 0; k < 2600; k++) {
+    gen(n) {
+      const b = builder(n), r = mulberry(7), g = gaussFrom(r), nCore = Math.round(n * 0.18);
+      for (let k = 0; k < nCore; k++) b.add(g() * 32, g() * 32, g() * 22, '#fff4d6');
+      for (let k = nCore; k < n; k++) {
         const rad = 25 + Math.pow(r(), 0.8) * 240, th = (k % 2) * Math.PI + Math.log(rad / 25) * 2.1 + g() * 0.28;
-        c.fillStyle = rad < 90 ? '#ffe2a8' : r() < 0.12 ? '#ff7ad9' : '#7fb0ff';
-        ell(c, 280 + rad * Math.cos(th), 280 + rad * Math.sin(th), 3.2, 3.2);
+        b.add(rad * Math.cos(th), rad * Math.sin(th), g() * (4 + 14 * Math.exp(-rad / 70)), rad < 90 ? '#ffe2a8' : r() < 0.12 ? '#ff7ad9' : '#7fb0ff');
       }
+      return b.done();
     },
-    anim(x, y, t) {
+    anim(x, y, z, t) {
       const r = Math.hypot(x, y), a = Math.atan2(y, x) + t * 0.25 * (1 + 60 / (r + 60));
-      AX = r * Math.cos(a); const ry = r * Math.sin(a);
-      if (is3D) { AY = ry * 0.6; AZ = ry * 0.8; } else { AY = ry; AZ = 0; }
+      const X = r * Math.cos(a), Y = r * Math.sin(a);
+      if (is3D) { AX = X; AY = Y * 0.6 - z * 0.8; AZ = Y * 0.8 + z * 0.6; } else { AX = X; AY = Y; AZ = 0; }
     } },
 ];
-const FIREWORKS = [[190, 170, 110, '#ff4d6d'], [400, 125, 130, '#4dd2ff'], [600, 190, 100, '#ffd84d']];
 
 function textShape(str) {
   const words = str.trim().toUpperCase().split(/\s+/), lines = [];
@@ -1144,25 +1262,45 @@ function textShape(str) {
   const fs = 170, m = document.createElement('canvas').getContext('2d');
   m.font = `900 ${fs}px system-ui, sans-serif`;
   const w = Math.ceil(Math.max(...lines.map(l => m.measureText(l).width))) + 40, h = Math.ceil(lines.length * fs * 1.05 + 40);
-  return { name: `Text: ${str.trim()}`, custom: 'text', w, h,
+  return { name: `Text: ${str.trim()}`, custom: 'text', w, h, depth: 0.45,
     draw(c) {
       const gr = c.createLinearGradient(0, 0, w, 0);
       ['#ff4d6d', '#ffb02e', '#ffe14d', '#5be37d', '#4dd2ff', '#9b7bff'].forEach((col, k, a) => gr.addColorStop(k / (a.length - 1), col));
       c.fillStyle = gr; c.font = `900 ${fs}px system-ui, sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle';
       lines.forEach((l, k) => c.fillText(l, w / 2, 20 + fs * 1.05 * (k + 0.5)));
     },
-    anim(x, y, t) { AX = x; AY = y + 5 * Math.sin(x * 0.012 - t * 1.6); AZ = 10 * Math.cos(x * 0.012 - t * 1.6); } };
+    // a flag-like ripple runs along the letters
+    anim(x, y, z, t) { const ph = x * 0.012 - t * 1.6; AX = x; AY = y + 5 * Math.sin(ph); AZ = z + 26 * Math.cos(ph); } };
 }
 function imageShape(img, name) {
   const k = Math.min(1, 640 / Math.max(img.width, img.height));
   const w = Math.max(1, Math.round(img.width * k)), h = Math.max(1, Math.round(img.height * k));
   return { name: `Image: ${name}`, custom: 'image', w, h, stipple: true,
     draw(c) { c.drawImage(img, 0, 0, w, h); },
-    anim(x, y, t) { turn(x, y, 0.25 * Math.sin(t * 0.6)); } };
+    anim(x, y, z, t) { turn(x, y, z, 0.45 * Math.sin(t * 0.5)); } };
 }
 
-// spread a shape into n target points (shape-centred coordinates) with LED colours
-function sampleShape(shape, n) {
+// distance (in pixels) from each filled pixel to the nearest empty one: two-pass 3-4 chamfer
+function chamfer(mask, w, h) {
+  const d = new Float32Array(w * h), INF = 1e9;
+  for (let k = 0; k < w * h; k++) d[k] = mask[k] ? INF : 0;
+  const at = (x, y) => (x < 0 || y < 0 || x >= w || y >= h) ? 0 : d[y * w + x];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const k = y * w + x; if (!d[k]) continue;
+    d[k] = Math.min(d[k], at(x - 1, y) + 3, at(x, y - 1) + 3, at(x - 1, y - 1) + 4, at(x + 1, y - 1) + 4);
+  }
+  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
+    const k = y * w + x; if (!d[k]) continue;
+    d[k] = Math.min(d[k], at(x + 1, y) + 3, at(x, y + 1) + 3, at(x + 1, y + 1) + 4, at(x - 1, y + 1) + 4);
+  }
+  for (let k = 0; k < w * h; k++) d[k] /= 3;
+  return d;
+}
+
+function sampleShape(shape, n) { return shape.gen ? shape.gen(n) : sampleDrawn(shape, n, is3D && !shape.flat); }
+
+// spread a drawn shape into n target points (shape-centred coordinates) with LED colours
+function sampleDrawn(shape, n, inflate) {
   const w = shape.w, h = shape.h;
   const off = document.createElement('canvas'); off.width = w; off.height = h;
   const c = off.getContext('2d', { willReadFrequently: true });
@@ -1170,49 +1308,105 @@ function sampleShape(shape, n) {
   shape.draw(c, w, h);
   const data = c.getImageData(0, 0, w, h).data;
   const at = (x, y) => ((y | 0) * w + (x | 0)) * 4;
-  let pts = [];
+  const hexGrid = (s, keep) => { const out = []; for (let row = 0, y = s / 2; y < h; row++, y += s * 0.866) for (let x = (row % 2 ? s : s / 2); x < w; x += s) if (keep(x, y)) out.push(x, y); return out; };
+  const filledAt = (x, y) => data[at(x, y) + 3] > 128;
+  let filled = 0; for (let k = 3; k < data.length; k += 4) if (data[k] > 128) filled++;
+  let pts = [];   // x, y, z triples
+  const back = [];  // inflated shapes: 1 where the point is on the back surface
   if (shape.stipple) {
-    // photo: candidates on a fine hex grid, kept with probability ∝ brightness^1.5, tuned to give n
+    // photo: candidates on a fine hex grid, kept with probability ∝ brightness^1.5, tuned to give n.
+    // In 3D brightness also becomes relief: bright parts stand forward (toward -z, the camera).
     const s0 = Math.sqrt(w * h / (n * 5) / 0.866), rr = mulberry(11), cand = [];
     for (let row = 0, y = s0 / 2; y < h; row++, y += s0 * 0.866) for (let x = (row % 2 ? s0 : s0 / 2); x < w; x += s0) {
       const o = at(x, y); if (data[o + 3] < 128) continue;
-      cand.push(x, y, Math.pow((0.3 * data[o] + 0.59 * data[o + 1] + 0.11 * data[o + 2]) / 255, 1.5), rr());
+      const lum = (0.3 * data[o] + 0.59 * data[o + 1] + 0.11 * data[o + 2]) / 255;
+      cand.push(x, y, Math.pow(lum, 1.5), rr(), lum);
     }
     let lo = 0, hi = 64;
     for (let it = 0; it < 32; it++) {
       const f = (lo + hi) / 2; let cnt = 0;
-      for (let q = 0; q < cand.length; q += 4) if (cand[q + 3] < f * cand[q + 2]) cnt++;
+      for (let q = 0; q < cand.length; q += 5) if (cand[q + 3] < f * cand[q + 2]) cnt++;
       if (cnt < n) lo = f; else hi = f;
     }
-    for (let q = 0; q < cand.length; q += 4) if (cand[q + 3] < hi * cand[q + 2]) pts.push(cand[q], cand[q + 1]);
-  } else {
-    let filled = 0; for (let k = 3; k < data.length; k += 4) if (data[k] > 128) filled++;
+    const relief = inflate ? Math.max(w, h) * 0.12 : 0;
+    for (let q = 0; q < cand.length; q += 5) if (cand[q + 3] < hi * cand[q + 2]) pts.push(cand[q], cand[q + 1], (0.5 - cand[q + 4]) * relief);
+  } else if (!inflate) {
     // bisect the hex-grid spacing for the widest grid that still gives ≥ n points, so few are dropped
-    const grid = s => { const out = []; for (let row = 0, y = s / 2; y < h; row++, y += s * 0.866) for (let x = (row % 2 ? s : s / 2); x < w; x += s) if (data[at(x, y) + 3] > 128) out.push(x, y); return out; };
     const s0 = Math.sqrt(filled / Math.max(1, n) / 0.866);
     let lo = s0 * 0.5, hi = s0 * 1.5;
-    for (let it = 0; it < 24; it++) { const mid = (lo + hi) / 2; if (grid(mid).length / 2 >= n) lo = mid; else hi = mid; }
-    pts = grid(lo);
+    for (let it = 0; it < 24; it++) { const mid = (lo + hi) / 2; if (hexGrid(mid, filledAt).length / 2 >= n) lo = mid; else hi = mid; }
+    const g = hexGrid(lo, filledAt);
+    for (let q = 0; q < g.length; q += 2) pts.push(g[q], g[q + 1], 0);
+  } else {
+    const mask = new Uint8Array(w * h);
+    for (let k = 0; k < w * h; k++) mask[k] = data[k * 4 + 3] > 128 ? 1 : 0;
+    const dist = chamfer(mask, w, h);
+    // rim: edge pixels thinned to roughly the grid spacing, so the silhouette reads from the side
+    const rr = mulberry(3), band = [];
+    for (let k = 0; k < w * h; k++) if (mask[k] && dist[k] <= 1.01) band.push(k);
+    for (let k = band.length - 1; k > 0; k--) { const j = (rr() * (k + 1)) | 0; const t = band[k]; band[k] = band[j]; band[j] = t; }
+    const rim = s => {
+      const cell = new Map(), out = [], s2 = s * s;
+      for (const k of band) {
+        const x = k % w, y = (k / w) | 0, cx = Math.floor(x / s), cy = Math.floor(y / s);
+        let ok = true;
+        for (let a = -1; a <= 1 && ok; a++) for (let b = -1; b <= 1 && ok; b++) {
+          const l = cell.get((cx + a) * 65536 + cy + b); if (!l) continue;
+          for (let q = 0; q < l.length; q += 2) if ((l[q] - x) ** 2 + (l[q + 1] - y) ** 2 < s2) { ok = false; break; }
+        }
+        if (!ok) continue;
+        const key = cx * 65536 + cy; if (!cell.has(key)) cell.set(key, []); cell.get(key).push(x, y); out.push(x, y);
+      }
+      return out;
+    };
+    // front + back + rim = n
+    // front + every other point on the back (a sparser back keeps the front's details legible) + rim
+    const count = s => { const n2 = hexGrid(s, filledAt).length / 2; return n2 + Math.ceil(n2 / 2) + rim(s * 0.9).length / 2; };
+    const s0 = Math.sqrt(1.5 * filled / Math.max(1, n) / 0.866);
+    let lo = s0 * 0.5, hi = s0 * 2.5;
+    for (let it = 0; it < 20; it++) { const mid = (lo + hi) / 2; if (count(mid) >= n) lo = mid; else hi = mid; }
+    const g = hexGrid(lo, filledAt), rm = rim(lo * 0.9);
+    // local thickness: the largest inscribed circle covering each point (circle centres = ridge pixels)
+    const ridges = [];
+    for (let y = 2; y < h - 2; y += 2) for (let x = 2; x < w - 2; x += 2) {
+      const d = dist[y * w + x]; if (d < 2) continue;
+      let top = true;
+      for (let a = -1; a <= 1 && top; a++) for (let b = -1; b <= 1; b++) if ((a || b) && dist[(y + b * 2) * w + x + a * 2] > d) { top = false; break; }
+      if (top) ridges.push(x, y, d);
+    }
+    const depth = shape.depth ?? 0.7;
+    const height = (x, y) => {
+      const d = dist[(y | 0) * w + (x | 0)]; let r = d;
+      for (let q = 0; q < ridges.length; q += 3) { const rd = ridges[q + 2]; if (rd > r && (x - ridges[q]) ** 2 + (y - ridges[q + 1]) ** 2 < rd * rd) r = rd; }
+      return depth * Math.sqrt(Math.max(0, d * (2 * r - d)));    // circular cross-section of radius r
+    };
+    for (let q = 0; q < g.length; q += 2) { const z = height(g[q], g[q + 1]); pts.push(g[q], g[q + 1], -z); back.push(0); if ((q / 2) % 2 === 0) { pts.push(g[q], g[q + 1], z); back.push(1); } }   // the camera looks along +z, so the front is at -z
+    for (let q = 0; q < rm.length; q += 2) { pts.push(rm[q], rm[q + 1], 0); back.push(0); }
   }
-  const m = pts.length / 2, rr = mulberry(5), idx = Array.from({ length: m }, (_, k) => k);
+  const m = pts.length / 3, rr = mulberry(5), idx = Array.from({ length: m }, (_, k) => k);
   for (let k = m - 1; k > 0; k--) { const j = (rr() * (k + 1)) | 0; const t = idx[k]; idx[k] = idx[j]; idx[j] = t; }
-  const X = new Float32Array(n), Y = new Float32Array(n), C = new Uint16Array(n), palette = [], pmap = new Map();
+  const X = new Float32Array(n), Y = new Float32Array(n), Z = new Float32Array(n), C = new Uint16Array(n), palette = [], pmap = new Map();
   for (let k = 0; k < n; k++) {
-    const q = m ? idx[k % m] : 0, x = m ? pts[2 * q] : w / 2, y = m ? pts[2 * q + 1] : h / 2;
+    const q = m ? idx[k % m] : 0, x = m ? pts[3 * q] : w / 2, y = m ? pts[3 * q + 1] : h / 2, z = m ? pts[3 * q + 2] : 0;
     const jit = k >= m ? 3 : 0;   // more boids than points: double up with a little jitter
-    X[k] = x - w / 2 + (rr() - 0.5) * jit; Y[k] = y - h / 2 + (rr() - 0.5) * jit;
+    X[k] = x - w / 2 + (rr() - 0.5) * jit; Y[k] = y - h / 2 + (rr() - 0.5) * jit; Z[k] = z;
     const o = at(x, y);
     let r = data[o], g = data[o + 1], b = data[o + 2];
-    const f = Math.min(2.5, 255 / Math.max(r, g, b, 1)); r = Math.min(255, r * f) | 0; g = Math.min(255, g * f) | 0; b = Math.min(255, b * f) | 0;  // LEDs at full brightness
+    // the back of an inflated shape: its own colour (e.g. hair on the back of the head), or the front's colour
+    // at half brightness, so a face or a carving doesn't show through mirrored
+    const isBack = m && back[q] === 1;
+    if (isBack && shape.back && shape.back !== 'same') { const hx = parseInt(shape.back.slice(1), 16); r = hx >> 16; g = (hx >> 8) & 255; b = hx & 255; }
+    let f = Math.min(2.5, 255 / Math.max(r, g, b, 1));
+    if (isBack && shape.back !== 'same' && !shape.back) f *= 0.5; r = Math.min(255, r * f) | 0; g = Math.min(255, g * f) | 0; b = Math.min(255, b * f) | 0;  // LEDs at full brightness
     const key = (r >> 4) << 8 | (g >> 4) << 4 | (b >> 4);
     if (!pmap.has(key)) { pmap.set(key, palette.length); palette.push(`rgb(${r},${g},${b})`); }
     C[k] = pmap.get(key);
   }
-  return { X, Y, C, palette };
+  return { X, Y, Z, C, palette };
 }
 
 const show = { on: false, idx: 0, t: 0, list: SHAPES.slice(), cur: SHAPES[0], palette: ['#fff'],
-  bx: new Float32Array(MAX), by: new Float32Array(MAX), col: new Uint16Array(MAX),
+  bx: new Float32Array(MAX), by: new Float32Array(MAX), bz: new Float32Array(MAX), col: new Uint16Array(MAX),
   tx: new Float32Array(MAX), ty: new Float32Array(MAX), tz: new Float32Array(MAX) };
 
 function showFrame() {   // [centre x, y, z, world units per shape pixel]
@@ -1221,11 +1415,11 @@ function showFrame() {   // [centre x, y, z, world units per shape pixel]
   const availW = (!panel.classList.contains('hidden') && W > 760) ? W - 306 : W;
   return [availW / 2, H / 2, 0, Math.min(availW * 0.86 / sh.w, H * 0.8 / sh.h)];
 }
-function shapeTarget(bx, by, t) { if (show.cur.anim) show.cur.anim(bx, by, t); else { AX = bx; AY = by; AZ = 0; } }
+function shapeTarget(bx, by, bz, t) { if (show.cur.anim) show.cur.anim(bx, by, bz, t); else { AX = bx; AY = by; AZ = bz; } }
 function updateShowTargets() {
   const [cx, cy, cz, k] = showFrame();
   for (let i = 0; i < N; i++) {
-    shapeTarget(show.bx[i], show.by[i], show.t);
+    shapeTarget(show.bx[i], show.by[i], show.bz[i], show.t);
     show.tx[i] = cx + AX * k; show.ty[i] = cy + AY * k; show.tz[i] = is3D ? cz + AZ * k : 0;
   }
 }
@@ -1245,16 +1439,17 @@ function assignShow() {
   const [cx, cy, , k] = showFrame();
   const hv = (x, y) => hilbert(clamp((x / Math.max(WX, 1) * 1023) | 0, 0, 1023), clamp((y / Math.max(WY, 1) * 1023) | 0, 0, 1023));
   const tk = new Float64Array(N), bk = new Float64Array(N);
-  for (let j = 0; j < N; j++) { shapeTarget(smp.X[j], smp.Y[j], 0); tk[j] = hv(cx + AX * k, cy + AY * k); bk[j] = hv(px[j], py[j]); }
+  for (let j = 0; j < N; j++) { shapeTarget(smp.X[j], smp.Y[j], smp.Z[j], 0); tk[j] = hv(cx + AX * k, cy + AY * k); bk[j] = hv(px[j], py[j]); }
   const to = Array.from({ length: N }, (_, j) => j).sort((a, b) => tk[a] - tk[b]);
   const bo = Array.from({ length: N }, (_, j) => j).sort((a, b) => bk[a] - bk[b]);
-  for (let j = 0; j < N; j++) { const b = bo[j], t = to[j]; show.bx[b] = smp.X[t]; show.by[b] = smp.Y[t]; show.col[b] = smp.C[t]; }
+  for (let j = 0; j < N; j++) { const b = bo[j], t = to[j]; show.bx[b] = smp.X[t]; show.by[b] = smp.Y[t]; show.bz[b] = smp.Z[t]; show.col[b] = smp.C[t]; }
   show.t = 0;
 }
 function startShow(idx) {
   if (hunterMode !== 'none') setHunterMode('none');
   focus = -1;
-  if (N < 1000) { P.count = 1500; syncUI(); setCount(1500); }
+  const want = is3D ? 2500 : 1500;   // 3D shapes have a front and a back to cover
+  if (N < want * 0.66) { P.count = want; syncUI(); setCount(want); }
   show.idx = clamp(idx | 0, 0, show.list.length - 1); show.cur = show.list[show.idx];
   show.on = true;
   assignShow();
@@ -1265,20 +1460,30 @@ function nextShape() { show.idx = (show.idx + 1) % show.list.length; show.cur = 
 function advanceShow() { show.t += 1 / 60; if ($('showAuto').checked && show.t > P.hold) nextShape(); }
 
 function drawShow() {
-  const pal = show.palette, np = pal.length, cnt = new Int32Array(np + 1);
-  for (let i = 0; i < N; i++) cnt[show.col[i] + 1]++;
-  for (let k = 0; k < np; k++) cnt[k + 1] += cnt[k];
-  const fillp = cnt.slice(0, np);
-  for (let i = 0; i < N; i++) order[fillp[show.col[i]]++] = i;
+  // in 3D, drones are binned by depth so far ones glow dimmer (additive blending needs no sorting)
+  const pal = show.palette, np = pal.length, nb = is3D ? BANDS : 1, nk = np * nb, cnt = new Int32Array(nk + 1), key = new Uint32Array(N);
+  // depth range of the formation this frame, so its own front is bright and its back dim
+  let zNear = Infinity, zFar = -Infinity;
+  if (is3D) for (let i = 0; i < N; i++) { project(px[i], py[i], pz[i]); if (PZ < zNear) zNear = PZ; if (PZ > zFar) zFar = PZ; }
+  if (zFar - zNear < 1) zFar = zNear + 1;
+  for (let i = 0; i < N; i++) {
+    let band = 0;
+    if (is3D) { project(px[i], py[i], pz[i]); band = bandOf(PZ, zNear, zFar); }
+    key[i] = band * np + show.col[i]; cnt[key[i] + 1]++;
+  }
+  for (let q = 0; q < nk; q++) cnt[q + 1] += cnt[q];
+  const fillp = cnt.slice(0, nk);
+  for (let i = 0; i < N; i++) order[fillp[key[i]]++] = i;
   ctx.save(); ctx.globalCompositeOperation = 'lighter';
   const base = (is3D ? 2.4 : 2.0) * P.size;
   for (const [mult, alpha] of [[3.2, 0.13], [1, 1]]) {      // soft glow, then the bright LED
-    ctx.globalAlpha = alpha;
-    for (let p = 0; p < np; p++) {
-      const lo = cnt[p], hi = cnt[p + 1]; if (lo === hi) continue;
+    for (let q = 0; q < nk; q++) {
+      const lo = cnt[q], hi = cnt[q + 1]; if (lo === hi) continue;
+      const band = Math.floor(q / np);
+      ctx.globalAlpha = alpha * (nb > 1 ? 0.12 + 0.88 * (band / (nb - 1)) ** 1.5 : 1);
       ctx.beginPath();
-      for (let k = lo; k < hi; k++) { const i = order[k]; project(px[i], py[i], pz[i]); const r = base * mult * PS; ctx.moveTo(PX + r, PY); ctx.arc(PX, PY, r, 0, Math.PI * 2); }
-      ctx.fillStyle = pal[p]; ctx.fill();
+      for (let j = lo; j < hi; j++) { const i = order[j]; project(px[i], py[i], pz[i]); const r = base * mult * PS; ctx.moveTo(PX + r, PY); ctx.arc(PX, PY, r, 0, Math.PI * 2); }
+      ctx.fillStyle = pal[q % np]; ctx.fill();
     }
   }
   ctx.restore();
