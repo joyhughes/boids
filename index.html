@@ -105,6 +105,7 @@
   <div class="row"><label>Shape</label><select id="showShape" style="grid-column:span 2"></select></div>
   <label class="chk"><input type="checkbox" id="showAuto" checked><span>Move on to the next shape automatically</span></label>
   <label class="chk"><input type="checkbox" id="showFlock" checked><span>Fly between shapes as a flock</span></label>
+  <label class="chk"><input type="checkbox" id="showSparkle" checked><span>Sparkle, shimmer and light trails</span></label>
   <div id="showSliders"></div>
   <div class="row"><label>Your text</label><input id="showText" type="text" value="HELLO" maxlength="40" style="grid-column:span 2"></div>
   <div class="seg"><button id="showTextBtn">Fly the text</button></div>
@@ -250,6 +251,8 @@ const vx = new Float32Array(MAX), vy = new Float32Array(MAX), vz = new Float32Ar
 const ax = new Float32Array(MAX), ay = new Float32Array(MAX), az = new Float32Array(MAX);
 const nbr = new Uint16Array(MAX);
 const flk = new Float32Array(MAX);   // drone show: how much each drone is flocking (1 = in transit, 0 = holding its place)
+const spk = new Float32Array(MAX);   // drone show: landing flash, fading
+const dph = Float32Array.from({ length: MAX }, () => Math.random());   // drone show: each drone's own phase (hover, twinkle)
 const inPen = new Uint8Array(MAX);   // sheepdog rounds: boids inside the pen settle down
 const pcx = new Float32Array(MAX), pcy = new Float32Array(MAX), pcz = new Float32Array(MAX);   // body-overlap corrections
 // genes: weights for separation, alignment, cohesion and fleeing.  They always sum to geneSum,
@@ -572,7 +575,7 @@ function step() {
     if (showOn) {
       // fly to this boid's target point, slowing on arrival; separation only while travelling
       const gx = show.tx[i] - x, gy = show.ty[i] - y, gz = show.tz[i] - z, d = Math.hypot(gx, gy, gz), want = Math.min(showS, d * 0.06);
-      let fx = (d > 1e-6 ? gx / d * want : 0) - ux, fy = (d > 1e-6 ? gy / d * want : 0) - uy, fz = (d > 1e-6 ? gz / d * want : 0) - uz;
+      let fx = (d > 1e-6 ? gx / d * want : 0) + show.tvx[i] - ux, fy = (d > 1e-6 ? gy / d * want : 0) + show.tvy[i] - uy, fz = (d > 1e-6 ? gz / d * want : 0) + show.tvz[i] - uz;
       const f = Math.hypot(fx, fy, fz), cap = maxF * 6;
       if (f > cap) { fx *= cap / f; fy *= cap / f; fz *= cap / f; }
       if (ns) { steer(sx, sy, sz, ux, uy, uz, showS, maxF * 2); const w = Math.min(1, d / 30) * 0.8; fx += w * sx_; fy += w * sy_; fz += w * sz_; }
@@ -580,7 +583,9 @@ function step() {
       // flock sliders) plus a pull towards their target that grows over the first few seconds of a change.
       // Close to the target this fades out and the plain arrival steering above lands them precisely.
       const fl = flockOn ? smooth01((d - 10) / 90) : 0;
+      if (flk[i] > 0.05 && fl <= 0.05) spk[i] = 1;   // flash on landing
       flk[i] = fl; if (fl > 0.05) travelling++;
+      spk[i] *= 0.96;
       if (fl > 0) {
         const g = 0.15 + 1.85 * smooth01((show.t - 0.8) / 4);
         steer(gx, gy, gz, ux, uy, uz, flyS, maxF * 1.5);
@@ -1686,7 +1691,8 @@ function sampleDrawn(shape, n, inflate) {
 
 const show = { on: false, idx: 0, t: 0, arrived: -1, list: SHAPES.slice(), cur: SHAPES[0], palette: ['#fff'],
   bx: new Float32Array(MAX), by: new Float32Array(MAX), bz: new Float32Array(MAX), col: new Uint16Array(MAX),
-  tx: new Float32Array(MAX), ty: new Float32Array(MAX), tz: new Float32Array(MAX) };
+  tx: new Float32Array(MAX), ty: new Float32Array(MAX), tz: new Float32Array(MAX),
+  tvx: new Float32Array(MAX), tvy: new Float32Array(MAX), tvz: new Float32Array(MAX), fresh: true };   // tv*: target velocity
 
 function showFrame() {   // [centre x, y, z, world units per shape pixel]
   const sh = show.cur;
@@ -1695,10 +1701,20 @@ function showFrame() {   // [centre x, y, z, world units per shape pixel]
 }
 function shapeTarget(bx, by, bz, t) { if (show.cur.anim) show.cur.anim(bx, by, bz, t); else { AX = bx; AY = by; AZ = bz; } }
 function updateShowTargets() {
-  const [cx, cy, cz, k] = showFrame();
+  const [cx, cy, cz, k] = showFrame(), sparkle = $('showSparkle').checked, hover = 1.1 * P.size;
+  const fresh = show.fresh; show.fresh = false;
   for (let i = 0; i < N; i++) {
+    const ox = show.tx[i], oy = show.ty[i], oz = show.tz[i];
     shapeTarget(show.bx[i], show.by[i], show.bz[i], show.t);
     show.tx[i] = cx + AX * k; show.ty[i] = cy + AY * k; show.tz[i] = is3D ? cz + AZ * k : 0;
+    if (sparkle) {   // drones bob gently on the spot, as real ones hold position against the air
+      const ph = dph[i] * 6.283, t = show.t;
+      show.tx[i] += hover * Math.sin(t * 1.3 + ph); show.ty[i] += hover * Math.sin(t * 1.1 + ph * 1.7);
+      if (is3D) show.tz[i] += hover * Math.sin(t * 0.9 + ph * 2.3);
+    }
+    // how fast the target itself moves (spinning and waving shapes), so drones can keep up rather than trail behind
+    if (fresh) { show.tvx[i] = 0; show.tvy[i] = 0; show.tvz[i] = 0; }
+    else { show.tvx[i] = show.tx[i] - ox; show.tvy[i] = show.ty[i] - oy; show.tvz[i] = show.tz[i] - oz; }
   }
 }
 function hilbert(x, y) {   // position along a Hilbert curve on a 1024² grid: nearby points get nearby numbers
@@ -1721,7 +1737,7 @@ function assignShow() {
   const to = Array.from({ length: N }, (_, j) => j).sort((a, b) => tk[a] - tk[b]);
   const bo = Array.from({ length: N }, (_, j) => j).sort((a, b) => bk[a] - bk[b]);
   for (let j = 0; j < N; j++) { const b = bo[j], t = to[j]; show.bx[b] = smp.X[t]; show.by[b] = smp.Y[t]; show.bz[b] = smp.Z[t]; show.col[b] = smp.C[t]; }
-  show.t = 0; show.arrived = -1;
+  show.t = 0; show.arrived = -1; show.fresh = true;
 }
 function startShow(idx) {
   if (hunterMode !== 'none') setHunterMode('none');
@@ -1764,7 +1780,8 @@ function drawShow() {
   const fillp = cnt.slice(0, nk);
   for (let i = 0; i < N; i++) order[fillp[key[i]]++] = i;
   ctx.save(); ctx.globalCompositeOperation = 'lighter';
-  const base = (is3D ? 2.4 : 2.0) * P.size;
+  const base = (is3D ? 2.4 : 2.0) * P.size, sparkle = $('showSparkle').checked;
+  if (sparkle) drawTrails(pal, np);
   for (const [mult, alpha] of [[3.2, 0.13], [1, 1]]) {      // soft glow, then the bright LED
     for (let q = 0; q < nk; q++) {
       const lo = cnt[q], hi = cnt[q + 1]; if (lo === hi) continue;
@@ -1775,9 +1792,64 @@ function drawShow() {
       ctx.fillStyle = pal[q % np]; ctx.fill();
     }
   }
+  if (sparkle) drawSparkles(pal, base, zNear, zFar);
   ctx.restore();
   ctx.fillStyle = 'rgba(216,220,230,0.5)'; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
   ctx.fillText(show.cur.name, is3D ? scx : showFrame()[0], H - 22); ctx.textAlign = 'start';
+}
+
+// light trails behind drones in flight: a short streak back along each one's velocity
+function drawTrails(pal, np) {
+  const paths = pal.map(() => new Path2D());
+  let any = false;
+  for (let i = 0; i < N; i++) {
+    if (flk[i] < 0.15) continue;
+    project(px[i] - vx[i] * 9, py[i] - vy[i] * 9, pz[i] - vz[i] * 9); const x0 = PX, y0 = PY;
+    project(px[i], py[i], pz[i]);
+    const p = paths[show.col[i] % np]; p.moveTo(x0, y0); p.lineTo(PX, PY); any = true;
+  }
+  if (!any) return;
+  ctx.lineCap = 'round';
+  for (const [lw, a] of [[4 * P.size, 0.07], [1.3 * P.size, 0.35]]) {
+    ctx.lineWidth = lw; ctx.globalAlpha = a;
+    for (let q = 0; q < np; q++) { ctx.strokeStyle = pal[q]; ctx.stroke(paths[q]); }
+  }
+}
+// glints: each drone twinkles now and then, flashes when it lands, and a shimmer sweeps across the shape
+const SHIMMER_EVERY = 7, SHIMMER_SWEEP = 2.6;
+function drawSparkles(pal, base, zNear, zFar) {
+  const t = show.t, np = pal.length;
+  // shimmer band: a diagonal line crossing the screen
+  const sp = t % SHIMMER_EVERY, sweeping = sp < SHIMMER_SWEEP && show.arrived >= 0;
+  let uMin = Infinity, uMax = -Infinity;
+  if (sweeping) for (let i = 0; i < N; i++) { project(px[i], py[i], pz[i]); const u = PX * 0.8 + PY * 0.6; if (u < uMin) uMin = u; if (u > uMax) uMax = u; }
+  const front = uMin - 80 + (uMax - uMin + 160) * (sp / SHIMMER_SWEEP), width = 45;
+  const flare = new Path2D(), core = new Path2D();
+  for (let i = 0; i < N; i++) {
+    if (flk[i] > 0.3) continue;
+    const ph = dph[i], rate = 0.1 + 0.22 * ((ph * 7.31) % 1), c = (t * rate + ph) % 1;
+    let g = c < 0.03 ? Math.sin(Math.PI * c / 0.03) : 0;
+    if (spk[i] > g) g = spk[i];
+    project(px[i], py[i], pz[i]);
+    let w = 0;
+    if (sweeping) { const du = (PX * 0.8 + PY * 0.6 - front) / width; if (du > -2.5 && du < 2.5) w = Math.exp(-du * du); }
+    if (g < 0.06 && w < 0.06) continue;
+    const depth = is3D ? 1 - 0.8 * clamp((PZ - zNear) / (zFar - zNear), 0, 1) : 1;   // the back of a 3D shape glints faintly
+    const s = PS * base;
+    if (w >= 0.06) {   // shimmer: the drone's own colour swells
+      ctx.globalAlpha = 0.55 * w * depth; ctx.fillStyle = pal[show.col[i] % np];
+      ctx.beginPath(); ctx.arc(PX, PY, s * 2.4, 0, 6.283); ctx.fill();
+      core.moveTo(PX + s * 0.8 * w, PY); core.arc(PX, PY, s * 0.8 * w, 0, 6.283);
+    }
+    if (g >= 0.06) {   // glint: a white star with a four-point flare
+      const L = s * (3 + 6 * g);
+      ctx.globalAlpha = 0.5 * g * depth; ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(PX, PY, s * (0.6 + 0.9 * g), 0, 6.283); ctx.fill();
+      flare.moveTo(PX - L, PY); flare.lineTo(PX + L, PY); flare.moveTo(PX, PY - L); flare.lineTo(PX, PY + L);
+    }
+  }
+  ctx.globalAlpha = 0.5; ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(0.8, 0.6 * P.size); ctx.stroke(flare);
+  ctx.globalAlpha = 0.6; ctx.fillStyle = '#fff'; ctx.fill(core);
 }
 
 const shapeSel = $('showShape');
